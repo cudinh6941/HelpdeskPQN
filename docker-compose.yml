@@ -1,0 +1,143 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: helpdesk-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-helpdesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-helpdesk_secret_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-helpdesk_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-helpdesk} -d ${POSTGRES_DB:-helpdesk_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: helpdesk-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: helpdesk-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123};
+      mc mb -p local/${MINIO_BUCKET:-helpdesk-attachments} || true;
+      exit 0;
+      "
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: helpdesk-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-helpdesk}:${POSTGRES_PASSWORD:-helpdesk_secret_pass}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      LDAP_ENABLED: ${LDAP_ENABLED:-false}
+      LDAP_ALLOW_LOCAL_FALLBACK: ${LDAP_ALLOW_LOCAL_FALLBACK:-true}
+      LDAP_SERVER_URI: ${LDAP_SERVER_URI:-ldap://dc.company.local:389}
+      LDAP_USE_SSL: ${LDAP_USE_SSL:-false}
+      LDAP_DOMAIN: ${LDAP_DOMAIN:-COMPANY}
+      LDAP_BASE_DN: ${LDAP_BASE_DN:-DC=company,DC=local}
+      LDAP_USER_DN_TEMPLATE: ${LDAP_USER_DN_TEMPLATE:-{username}@company.local}
+      LDAP_SEARCH_FILTER: ${LDAP_SEARCH_FILTER:-(sAMAccountName={username})}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret}
+      MINIO_ENABLED: "true"
+      MINIO_INTERNAL_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-localhost:9000}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-helpdesk-attachments}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://host.docker.internal:5678/webhook/it-helpdesk}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-helpdesk-n8n-secret}
+      N8N_DRY_RUN: ${N8N_DRY_RUN:-true}
+      RUN_EMBEDDED_WORKERS: "false"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:3000}
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: helpdesk-worker
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.runner"]
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-helpdesk}:${POSTGRES_PASSWORD:-helpdesk_secret_pass}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://host.docker.internal:5678/webhook/it-helpdesk}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-helpdesk-n8n-secret}
+      N8N_DRY_RUN: ${N8N_DRY_RUN:-true}
+      OUTBOX_POLL_INTERVAL_SECONDS: ${OUTBOX_POLL_INTERVAL_SECONDS:-5}
+      SLA_SCAN_INTERVAL_SECONDS: ${SLA_SCAN_INTERVAL_SECONDS:-30}
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ""
+    container_name: helpdesk-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: ""
+    ports:
+      - "3000:3000"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: helpdesk-caddy
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+      - minio
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
