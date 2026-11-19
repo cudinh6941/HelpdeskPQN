@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { BookOpen, Play, RefreshCw, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, BookOpen, Play, RefreshCw } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
 import {
@@ -22,6 +23,7 @@ import {
 import {
   AutomationSettings,
   Category,
+  KbArticleDetail,
   OutboxEvent,
   SlaPolicy,
   SupportGroup,
@@ -46,11 +48,7 @@ export default function AdminPage() {
   const [newCatName, setNewCatName] = useState("");
   const [newCatSlug, setNewCatSlug] = useState("");
   const [newCatPriority, setNewCatPriority] = useState<TicketPriority>("MEDIUM");
-
-  const [kbCategoryId, setKbCategoryId] = useState("");
-  const [kbTitle, setKbTitle] = useState("");
-  const [kbKeywords, setKbKeywords] = useState("");
-  const [kbStepsText, setKbStepsText] = useState("");
+  const [kbArticles, setKbArticles] = useState<KbArticleDetail[]>([]);
 
   const [autoBusy, setAutoBusy] = useState(false);
   const [autoStatusMsg, setAutoStatusMsg] = useState<string | null>(null);
@@ -58,27 +56,26 @@ export default function AdminPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [cats, grps, policies, usr, events, autoCfg] = await Promise.all([
+      const [cats, grps, policies, usr, events, autoCfg, kbRes] = await Promise.all([
         api.adminListCategories(),
         api.adminListGroups(),
         api.adminListSlaPolicies(),
         api.adminListUsers(),
         api.adminListOutboxEvents(),
         api.adminGetAutomationSettings(),
+        api.listKbArticles().catch(() => ({ items: [], total: 0 })),
       ]);
       setCategories(cats);
-      if (cats.length > 0 && !kbCategoryId) {
-        setKbCategoryId(cats[0].id);
-      }
       setGroups(grps);
       setSlas(policies);
       setUsers(usr);
       setOutbox(events);
       setAutoSettings(autoCfg);
+      setKbArticles(kbRes.items);
     } finally {
       setLoading(false);
     }
-  }, [kbCategoryId]);
+  }, []);
 
   useEffect(() => {
     void loadAll();
@@ -95,35 +92,6 @@ export default function AdminPage() {
     });
     setNewCatName("");
     setNewCatSlug("");
-    await loadAll();
-  };
-
-  const handleAddKb = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!kbCategoryId || !kbTitle.trim() || !kbStepsText.trim()) return;
-    const keywords = kbKeywords
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const steps = kbStepsText
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (steps.length === 0) return;
-
-    await api.adminAddKbArticle(kbCategoryId, {
-      title: kbTitle.trim(),
-      keywords,
-      steps,
-    });
-    setKbTitle("");
-    setKbKeywords("");
-    setKbStepsText("");
-    await loadAll();
-  };
-
-  const handleDeleteKb = async (categoryId: string, articleId: string) => {
-    await api.adminDeleteKbArticle(categoryId, articleId);
     await loadAll();
   };
 
@@ -177,12 +145,8 @@ export default function AdminPage() {
     await loadAll();
   };
 
-  const allKbRows = categories.flatMap((c) =>
-    (c.form_schema?.kb_articles || []).map((art) => ({
-      category: c,
-      article: art,
-    }))
-  );
+  const internalKbCount = kbArticles.filter((a) => a.visibility === "INTERNAL").length;
+  const publicKbCount = kbArticles.filter((a) => a.visibility === "PUBLIC").length;
 
   return (
     <AppShell>
@@ -277,84 +241,33 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              {/* Knowledge Base Management */}
+              {/* Knowledge Base Summary Card */}
               <div className="rounded-lg border border-border bg-card overflow-hidden">
                 <div className="h-10 px-4 border-b border-border bg-background flex items-center justify-between">
                   <span className="inline-flex items-center gap-1.5 text-body-strong">
                     <BookOpen className="size-4 text-muted-foreground" strokeWidth={1.5} />
-                    <span>Knowledge Base (Self-Help)</span>
+                    <span>Knowledge Base &amp; IT Runbooks</span>
                   </span>
-                  <span className="text-meta tabular-nums">{allKbRows.length}</span>
+                  <span className="text-meta tabular-nums">{kbArticles.length}</span>
                 </div>
 
-                <div className="max-h-[260px] overflow-y-auto divide-y divide-border-subtle">
-                  {allKbRows.map(({ category, article }) => (
-                    <div
-                      key={article.id}
-                      className="px-4 py-2.5 flex items-start justify-between gap-3"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-body-strong truncate">{article.title}</p>
-                        <p className="text-meta truncate">
-                          {category.name} / {article.steps.length} steps
-                        </p>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="icon"
-                        onClick={() => void handleDeleteKb(category.id, article.id)}
-                        title="Delete KB article"
-                      >
-                        <Trash2 className="size-3.5" strokeWidth={1.5} />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-
-                <form
-                  onSubmit={handleAddKb}
-                  className="p-3 border-t border-border bg-background space-y-2"
-                >
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <select
-                      value={kbCategoryId}
-                      onChange={(e) => setKbCategoryId(e.target.value)}
-                      className={selectBaseClass}
-                    >
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      value={kbKeywords}
-                      onChange={(e) => setKbKeywords(e.target.value)}
-                      placeholder="Keywords: vpn, wifi, remote"
-                      className={inputBaseClass}
-                    />
+                <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="text-body">
+                      {internalKbCount} internal IT runbooks · {publicKbCount} Portal self-help guides
+                    </p>
+                    <p className="text-meta">
+                      Dedicated DB table with screenshots, symptoms, root cause, and ticket links.
+                    </p>
                   </div>
-                  <input
-                    type="text"
-                    required
-                    value={kbTitle}
-                    onChange={(e) => setKbTitle(e.target.value)}
-                    placeholder="Guide title"
-                    className={inputBaseClass}
-                  />
-                  <textarea
-                    rows={3}
-                    required
-                    value={kbStepsText}
-                    onChange={(e) => setKbStepsText(e.target.value)}
-                    placeholder="Troubleshooting steps (one step per line)"
-                    className={inputBaseClass}
-                  />
-                  <Button type="submit" variant="primary" size="sm">
-                    Add KB article
-                  </Button>
-                </form>
+                  <Link
+                    href="/workspace/kb"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-sm bg-primary px-3 text-[13px] font-medium text-primary-foreground hover:opacity-90 shrink-0"
+                  >
+                    <span>Open Knowledge Base</span>
+                    <ArrowRight className="size-3.5" strokeWidth={1.5} />
+                  </Link>
+                </div>
               </div>
 
               {/* Categories */}

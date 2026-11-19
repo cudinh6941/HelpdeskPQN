@@ -4,6 +4,8 @@ import {
   AutomationSettings,
   Category,
   DemoAccount,
+  KbArticleDetail,
+  KbVisibility,
   OutboxEvent,
   SlaPolicy,
   SupportGroup,
@@ -147,6 +149,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ status, note }),
     }),
+  updateTicketPriority: (ticketId: string, priority: TicketPriority) =>
+    apiFetch<TicketDetail>(`/api/v1/tickets/${ticketId}/priority`, {
+      method: "PATCH",
+      body: JSON.stringify({ priority }),
+    }),
   rateTicket: (ticketId: string, rating: number, feedback?: string, close_ticket = true) =>
     apiFetch<TicketDetail>(`/api/v1/tickets/${ticketId}/rate`, {
       method: "POST",
@@ -164,7 +171,12 @@ export const api = {
     }),
 
   // Attachments (Presigned / Direct binary upload for Ctrl+V)
-  uploadAttachment: async (file: File | Blob, fileName: string, ticketId?: string): Promise<Attachment> => {
+  uploadAttachment: async (
+    file: File | Blob,
+    fileName: string,
+    ticketId?: string,
+    kbArticleId?: string
+  ): Promise<Attachment> => {
     const contentType = file.type || "image/png";
     const presigned = await apiFetch<{
       attachment_id: string;
@@ -176,6 +188,7 @@ export const api = {
         content_type: contentType,
         size_bytes: file.size,
         ticket_id: ticketId ?? null,
+        kb_article_id: kbArticleId ?? null,
       }),
     });
 
@@ -295,6 +308,59 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  // Knowledge Base (Dedicated DB Table + Image Attachments)
+  listKbArticles: (params?: {
+    q?: string;
+    category_id?: string;
+    visibility?: KbVisibility | "";
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.category_id) qs.set("category_id", params.category_id);
+    if (params?.visibility) qs.set("visibility", params.visibility);
+    const query = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<{ items: KbArticleDetail[]; total: number }>(`/api/v1/kb${query}`);
+  },
+  getKbArticle: (articleId: string) =>
+    apiFetch<KbArticleDetail>(`/api/v1/kb/${articleId}`),
+  createKbArticle: (payload: {
+    title: string;
+    category_id?: string | null;
+    visibility: KbVisibility;
+    symptoms?: string | null;
+    root_cause?: string | null;
+    steps: string[];
+    notes?: string | null;
+    keywords: string[];
+    source_ticket_id?: string | null;
+    attachment_ids?: string[];
+  }) =>
+    apiFetch<KbArticleDetail>("/api/v1/kb", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateKbArticle: (
+    articleId: string,
+    payload: {
+      title?: string;
+      category_id?: string | null;
+      visibility?: KbVisibility;
+      symptoms?: string | null;
+      root_cause?: string | null;
+      steps?: string[];
+      notes?: string | null;
+      keywords?: string[];
+      source_ticket_id?: string | null;
+      attachment_ids?: string[];
+    }
+  ) =>
+    apiFetch<KbArticleDetail>(`/api/v1/kb/${articleId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteKbArticle: (articleId: string) =>
+    apiFetch<void>(`/api/v1/kb/${articleId}`, { method: "DELETE" }),
+
   adminRunAutoCloseNow: (hours?: number) =>
     apiFetch<{ auto_closed: number }>(
       `/api/v1/admin/automation/run-auto-close${hours ? `?hours=${hours}` : ""}`,

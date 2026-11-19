@@ -13,8 +13,9 @@ from app.core.database import get_db
 from app.core.minio_client import storage_service
 from app.core.security import get_current_user
 from app.core.uuid_utils import uuid7
-from app.models.models import Ticket, TicketAttachment, User, UserRole
+from app.models.models import KbArticle, KbVisibility, Ticket, TicketAttachment, User, UserRole
 from app.schemas.schemas import AttachmentOut, PresignedUploadRequest, PresignedUploadResponse
+from app.services.ticket_state_machine import IT_ROLES
 
 router = APIRouter(prefix="/attachments", tags=["Attachments (MinIO + Ctrl+V Paste)"])
 
@@ -24,6 +25,7 @@ def serialize_attachment(att: TicketAttachment) -> AttachmentOut:
         id=att.id,
         ticket_id=att.ticket_id,
         comment_id=att.comment_id,
+        kb_article_id=att.kb_article_id,
         file_name=att.file_name,
         content_type=att.content_type,
         size_bytes=att.size_bytes,
@@ -53,9 +55,17 @@ async def create_presigned_upload(
         if current_user.role == UserRole.END_USER and ticket.requester_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Không có quyền đính kèm file vào ticket này.")
 
+    if payload.kb_article_id is not None:
+        if current_user.role not in IT_ROLES:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Chỉ đội IT mới được đính kèm ảnh vào Knowledge Base.")
+        kb_res = await db.execute(select(KbArticle).where(KbArticle.id == payload.kb_article_id))
+        if kb_res.scalar_one_or_none() is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy bài viết Knowledge Base.")
+
     att = TicketAttachment(
         id=att_id,
         ticket_id=payload.ticket_id,
+        kb_article_id=payload.kb_article_id,
         uploader_id=current_user.id,
         bucket_name=settings.MINIO_BUCKET,
         object_key=object_key,
@@ -179,6 +189,12 @@ async def download_attachment_file(
         ticket = t_res.scalar_one_or_none()
         if ticket and ticket.requester_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Không có quyền xem tệp này.")
+
+    if current_user.role == UserRole.END_USER and att.kb_article_id is not None:
+        kb_res = await db.execute(select(KbArticle).where(KbArticle.id == att.kb_article_id))
+        kb = kb_res.scalar_one_or_none()
+        if kb and kb.visibility != KbVisibility.PUBLIC:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Không có quyền xem tệp nội bộ này.")
 
     data = storage_service.get_object_bytes(att.object_key)
     if data is None:

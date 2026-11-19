@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import { NavigationProgressProvider } from "@/components/NavigationProgress";
 
 const sans = Inter({
   subsets: ["latin", "vietnamese"],
@@ -22,7 +23,9 @@ export default function RootLayout({
   return (
     <html lang="vi" className={sans.variable} suppressHydrationWarning>
       <body className="antialiased" suppressHydrationWarning>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <NavigationProgressProvider>{children}</NavigationProgressProvider>
+        </AuthProvider>
       </body>
     </html>
   );

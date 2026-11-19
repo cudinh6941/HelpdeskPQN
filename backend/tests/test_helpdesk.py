@@ -548,3 +548,76 @@ async def test_knowledge_base_seeded_and_admin_crud():
         )
         assert del_resp.status_code == 200
         assert all(a["id"] != new_id for a in del_resp.json()["form_schema"]["kb_articles"])
+
+
+@pytest.mark.asyncio
+async def test_dedicated_kb_articles_with_images_and_rbac():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        user_token = await _login(client, "nhanvien")
+        agent_token = await _login(client, "kythuat")
+        user_headers = {"Authorization": f"Bearer {user_token}"}
+        agent_headers = {"Authorization": f"Bearer {agent_token}"}
+
+        # 1. Seeded internal + public articles exist for IT_AGENT, END_USER only sees PUBLIC
+        it_list = (await client.get("/api/v1/kb", headers=agent_headers)).json()
+        user_list = (await client.get("/api/v1/kb", headers=user_headers)).json()
+        assert any(a["visibility"] == "INTERNAL" for a in it_list["items"])
+        assert all(a["visibility"] == "PUBLIC" for a in user_list["items"])
+
+        # 2. IT_AGENT uploads a screenshot and creates an INTERNAL runbook article
+        presigned = (
+            await client.post(
+                "/api/v1/attachments/presigned-upload",
+                headers=agent_headers,
+                json={"file_name": "fix-spooler.png", "content_type": "image/png", "size_bytes": 12},
+            )
+        ).json()
+        put_resp = await client.put(
+            presigned["direct_upload_url"],
+            headers={**agent_headers, "Content-Type": "image/png"},
+            content=b"\x89PNG\r\n\x1a\nfake",
+        )
+        assert put_resp.status_code == 200
+        att_id = put_resp.json()["id"]
+
+        create_resp = await client.post(
+            "/api/v1/kb",
+            headers=agent_headers,
+            json={
+                "title": "Fix lỗi ERP ca khó 0x800",
+                "visibility": "INTERNAL",
+                "symptoms": "Mở ERP báo lỗi kết nối SQL.",
+                "root_cause": "Firewall chặn port 1433.",
+                "steps": ["Mở port 1433", "Restart service"],
+                "notes": "Test-NetConnection -Port 1433",
+                "keywords": ["erp", "0x800"],
+                "attachment_ids": [att_id],
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.text
+        created = create_resp.json()
+        assert len(created["attachments"]) == 1
+        kb_id = created["id"]
+
+        # 3. END_USER cannot read INTERNAL KB article or its image attachment
+        assert (await client.get(f"/api/v1/kb/{kb_id}", headers=user_headers)).status_code == 403
+        assert (
+            await client.get(f"/api/v1/attachments/{att_id}/file", headers=user_headers)
+        ).status_code == 403
+
+        # 4. IT_AGENT can update and switch to PUBLIC, then END_USER can read it
+        patch_resp = await client.patch(
+            f"/api/v1/kb/{kb_id}",
+            headers=agent_headers,
+            json={"visibility": "PUBLIC", "title": "Fix lỗi ERP ca khó 0x800 (Updated)"},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["visibility"] == "PUBLIC"
+        assert (await client.get(f"/api/v1/kb/{kb_id}", headers=user_headers)).status_code == 200
+        assert (
+            await client.get(f"/api/v1/attachments/{att_id}/file", headers=user_headers)
+        ).status_code == 200
+
+        # 5. Cleanup delete
+        del_resp = await client.delete(f"/api/v1/kb/{kb_id}", headers=agent_headers)
+        assert del_resp.status_code == 204

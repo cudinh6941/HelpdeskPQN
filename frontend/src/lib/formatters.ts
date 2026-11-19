@@ -25,18 +25,6 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   SYS_ADMIN: "Quản trị viên",
 };
 
-export type TierKind = "enterprise" | "pro" | "free";
-
-export function getTicketTier(ticket: Pick<Ticket, "priority">): TierKind {
-  if (ticket.priority === "CRITICAL" || ticket.priority === "HIGH") {
-    return "enterprise";
-  }
-  if (ticket.priority === "MEDIUM") {
-    return "pro";
-  }
-  return "free";
-}
-
 export function getDepartmentLabel(ticket: Ticket): string {
   if (ticket.support_group?.name) return ticket.support_group.name;
   if (ticket.category?.name) return ticket.category.name;
@@ -69,8 +57,9 @@ export function formatRelativeTime(iso?: string | null): string {
 
 export function formatSlaCountdown(
   remainingSeconds: number | null | undefined,
-  state: "urgent" | "neutral" | "breached" | "paused" | "met"
+  state: "urgent" | "neutral" | "breached" | "paused" | "met" | "cancelled"
 ): string {
+  if (state === "cancelled") return "Cancelled";
   if (state === "paused") return "Paused";
   if (state === "met") return "Met";
   if (remainingSeconds === null || remainingSeconds === undefined) return "—";

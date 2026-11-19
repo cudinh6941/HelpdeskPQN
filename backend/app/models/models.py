@@ -49,6 +49,11 @@ class TicketPriority(str, enum.Enum):
     CRITICAL = "CRITICAL"
 
 
+class KbVisibility(str, enum.Enum):
+    PUBLIC = "PUBLIC"
+    INTERNAL = "INTERNAL"
+
+
 class OutboxStatus(str, enum.Enum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
@@ -310,6 +315,9 @@ class TicketAttachment(Base):
     comment_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(), ForeignKey("ticket_comments.id", ondelete="SET NULL"), index=True, nullable=True
     )
+    kb_article_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("kb_articles.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     uploader_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -323,7 +331,52 @@ class TicketAttachment(Base):
 
     ticket: Mapped[Optional["Ticket"]] = relationship("Ticket", back_populates="attachments")
     comment: Mapped[Optional["TicketComment"]] = relationship("TicketComment", back_populates="attachments")
+    kb_article: Mapped[Optional["KbArticle"]] = relationship("KbArticle", back_populates="attachments")
     uploader: Mapped["User"] = relationship("User")
+
+
+# 12. kb_articles (Dedicated Knowledge Base & IT Runbook Table)
+class KbArticle(Base):
+    __tablename__ = "kb_articles"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid7)
+    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("categories.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    visibility: Mapped[KbVisibility] = mapped_column(
+        SAEnum(KbVisibility, name="kb_visibility", native_enum=False),
+        default=KbVisibility.INTERNAL,
+        index=True,
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    symptoms: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    root_cause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    steps: Mapped[list] = mapped_column(JSONType, default=list, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    keywords: Mapped[list] = mapped_column(JSONType, default=list, nullable=False)
+    source_ticket_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("tickets.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    author_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    category: Mapped[Optional["Category"]] = relationship("Category")
+    source_ticket: Mapped[Optional["Ticket"]] = relationship("Ticket")
+    author: Mapped[Optional["User"]] = relationship("User", foreign_keys=[author_id])
+    updated_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[updated_by_id])
+    attachments: Mapped[list["TicketAttachment"]] = relationship(
+        "TicketAttachment", back_populates="kb_article", cascade="all, delete-orphan"
+    )
 
 
 # 11. outbox_events (Transactional Outbox + Audit Trail)

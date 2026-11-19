@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import uuid
 
@@ -35,6 +35,7 @@ from app.schemas.schemas import (
     TicketListResponse,
     TicketMetadataResponse,
     TicketOut,
+    TicketPriorityUpdate,
     TicketRateRequest,
     TicketStatusUpdate,
     TimelineEventOut,
@@ -42,7 +43,7 @@ from app.schemas.schemas import (
 )
 from app.services.auto_assign_service import pick_least_loaded_agent
 from app.services.outbox_writer import emit_outbox_event
-from app.services.sla_engine import calculate_due_date, evaluate_ticket_sla, resume_ticket_sla
+from app.services.sla_engine import calculate_due_date, ensure_utc, evaluate_ticket_sla, resume_ticket_sla
 from app.services.ticket_code_generator import generate_ticket_code
 from app.services.ticket_state_machine import IT_ROLES, stamp_first_response_if_needed, transition_ticket_status
 from app.services.ultraview_service import extract_ultraview_credentials, normalize_uv_id
@@ -527,6 +528,82 @@ async def update_ticket_status(
             "actor_id": str(current_user.id),
             "actor_name": current_user.full_name,
             "summary": f"{ticket.ticket_code} chuyển sang {ticket.status.value}",
+        },
+    )
+    return await get_ticket_detail(ticket.id, current_user, db)
+
+
+@router.patch("/{ticket_id}/priority", response_model=TicketDetailOut)
+async def update_ticket_priority(
+    ticket_id: uuid.UUID,
+    payload: TicketPriorityUpdate,
+    current_user: User = Depends(require_roles(UserRole.IT_AGENT, UserRole.IT_LEAD, UserRole.SYS_ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(select(Ticket).where(Ticket.id == ticket_id))
+    ticket = res.scalar_one_or_none()
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy ticket.")
+
+    if ticket.status in (TicketStatus.CLOSED, TicketStatus.CANCELLED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Không thể đổi độ ưu tiên của ticket đã đóng hoặc đã hủy.",
+        )
+
+    prev_priority = ticket.priority
+    if prev_priority == payload.priority:
+        return await get_ticket_detail(ticket.id, current_user, db)
+
+    now = datetime.now(timezone.utc)
+    ticket.priority = payload.priority
+    ticket.updated_at = now
+
+    sla_res = await db.execute(
+        select(SlaPolicy).where(SlaPolicy.priority == payload.priority, SlaPolicy.is_active == True)
+    )
+    sla_policy = sla_res.scalar_one_or_none()
+    cal_res = await db.execute(select(BusinessCalendar).where(BusinessCalendar.is_default == True))
+    calendar = cal_res.scalar_one_or_none()
+
+    if sla_policy is not None:
+        ticket.sla_policy_id = sla_policy.id
+        created_utc = ensure_utc(ticket.created_at) or now
+        if ticket.first_responded_at is None:
+            ticket.first_response_due_at = calculate_due_date(
+                created_utc, sla_policy.first_response_minutes, calendar, sla_policy.business_hours_only
+            )
+        base_resolution_due = calculate_due_date(
+            created_utc, sla_policy.resolution_minutes, calendar, sla_policy.business_hours_only
+        )
+        paused_sec = int(ticket.total_paused_seconds or 0)
+        ticket.resolution_due_at = (
+            base_resolution_due + timedelta(seconds=paused_sec) if paused_sec > 0 else base_resolution_due
+        )
+
+    emit_outbox_event(
+        db=db,
+        ticket=ticket,
+        actor=current_user,
+        event_type="PRIORITY_CHANGED",
+        summary=f"Độ ưu tiên đổi từ {prev_priority.value} sang {ticket.priority.value}",
+        details={
+            "from_priority": prev_priority.value,
+            "to_priority": ticket.priority.value,
+        },
+    )
+    await db.commit()
+    await ws_manager.broadcast_ticket_event(
+        "TICKET_UPDATED",
+        str(ticket.id),
+        str(ticket.requester_id),
+        payload={
+            "ticket_code": ticket.ticket_code,
+            "title": ticket.title,
+            "priority": ticket.priority.value,
+            "actor_id": str(current_user.id),
+            "actor_name": current_user.full_name,
+            "summary": f"{ticket.ticket_code} đổi ưu tiên sang {ticket.priority.value}",
         },
     )
     return await get_ticket_detail(ticket.id, current_user, db)

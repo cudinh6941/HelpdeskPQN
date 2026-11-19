@@ -15,8 +15,8 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
-import { formatSlaCountdown, getInitials, TierKind } from "@/lib/formatters";
-import { Ticket, TicketPriority } from "@/lib/types";
+import { formatSlaCountdown, getInitials, STATUS_LABELS } from "@/lib/formatters";
+import { Ticket, TicketPriority, TicketStatus } from "@/lib/types";
 
 /* ===== Button (§7) ===== */
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -121,23 +121,24 @@ export function SlaBadge({
   }, [ticket.sla_status?.remaining_seconds, ticket.id]);
 
   const rawState = ticket.sla_status?.state;
+  const isCancelled = ticket.status === "CANCELLED";
   const isTerminal =
-    ticket.status === "RESOLVED" ||
-    ticket.status === "CLOSED" ||
-    ticket.status === "CANCELLED";
+    ticket.status === "RESOLVED" || ticket.status === "CLOSED";
   const isPaused = rawState === "PAUSED" || ticket.status === "WAITING_FOR_USER";
 
   useEffect(() => {
-    if (isTerminal || isPaused || liveRemaining === null) return;
+    if (isCancelled || isTerminal || isPaused || liveRemaining === null) return;
     const intervalMs = Math.abs(liveRemaining) < 3600 ? 1000 : 60000;
     const timer = window.setInterval(() => {
       setLiveRemaining((prev) => (prev !== null ? prev - Math.floor(intervalMs / 1000) : null));
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [isTerminal, isPaused, liveRemaining]);
+  }, [isCancelled, isTerminal, isPaused, liveRemaining]);
 
-  let visualState: "urgent" | "neutral" | "breached" | "paused" | "met" = "neutral";
-  if (isTerminal) {
+  let visualState: "urgent" | "neutral" | "breached" | "paused" | "met" | "cancelled" = "neutral";
+  if (isCancelled) {
+    visualState = "cancelled";
+  } else if (isTerminal) {
     visualState = ticket.is_resolution_breached ? "breached" : "met";
   } else if (isPaused) {
     visualState = "paused";
@@ -162,6 +163,7 @@ export function SlaBadge({
     breached: "bg-sla-breached text-sla-breached-fg",
     paused: "bg-sla-neutral text-sla-neutral-fg",
     met: "bg-sla-neutral text-sla-neutral-fg",
+    cancelled: "bg-muted text-muted-foreground",
   };
 
   return (
@@ -177,28 +179,53 @@ export function SlaBadge({
   );
 }
 
-/* ===== Tier Badge (§5.2) ===== */
-const TIER_LABELS: Record<TierKind, string> = {
-  enterprise: "Enterprise",
-  pro: "Pro",
-  free: "Standard",
+/* ===== Status Badge ===== */
+const STATUS_STYLES: Record<TicketStatus, { pill: string; dot: string }> = {
+  NEW: {
+    pill: "border-border bg-card text-foreground",
+    dot: "bg-[#3B6FE0]",
+  },
+  ASSIGNED: {
+    pill: "border-border bg-card text-foreground",
+    dot: "bg-[#0F9D8A]",
+  },
+  IN_PROGRESS: {
+    pill: "border-[#D5E2FA] bg-[#F5F8FF] text-[#1E3A8A]",
+    dot: "bg-[#3B6FE0]",
+  },
+  WAITING_FOR_USER: {
+    pill: "border-note-border bg-note text-note-ink",
+    dot: "bg-[#D97706]",
+  },
+  REOPENED: {
+    pill: "border-[#F3D9B1] bg-[#FFF8EE] text-[#7C4A03]",
+    dot: "bg-[#EE9B3B]",
+  },
+  RESOLVED: {
+    pill: "border-[#CBEBD9] bg-[#F1FAF5] text-[#14532D]",
+    dot: "bg-[#1F9D68]",
+  },
+  CLOSED: {
+    pill: "border-border bg-muted/70 text-muted-foreground",
+    dot: "bg-faint",
+  },
+  CANCELLED: {
+    pill: "border-border bg-muted/70 text-muted-foreground",
+    dot: "bg-faint",
+  },
 };
 
-export function TierBadge({ tier }: { tier: TierKind }) {
-  const diamondColor =
-    tier === "enterprise"
-      ? "bg-tier-enterprise"
-      : tier === "pro"
-      ? "bg-tier-pro"
-      : "bg-tier-free";
-
+export function StatusBadge({ status }: { status: TicketStatus }) {
+  const style = STATUS_STYLES[status];
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-sm border border-border bg-card px-2 text-[13px] font-normal leading-4 text-foreground whitespace-nowrap">
-      <span
-        aria-hidden
-        className={cn("size-2 rotate-45 rounded-[2px] shrink-0", diamondColor)}
-      />
-      <span>{TIER_LABELS[tier]}</span>
+    <span
+      className={cn(
+        "inline-flex h-6 items-center gap-1.5 rounded-sm border px-2 text-[13px] font-medium leading-4 whitespace-nowrap shrink-0",
+        style.pill
+      )}
+    >
+      <span aria-hidden className={cn("size-1.5 rounded-full shrink-0", style.dot)} />
+      <span>{STATUS_LABELS[status]}</span>
     </span>
   );
 }
@@ -207,22 +234,22 @@ export function TierBadge({ tier }: { tier: TierKind }) {
 function getTopicIcon(slug?: string | null) {
   const s = (slug || "").toLowerCase();
   if (s.includes("network") || s.includes("wifi") || s.includes("vpn")) {
-    return <Network className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />;
+    return <Network className="size-3.5 text-[#3B6FE0] shrink-0" strokeWidth={1.5} />;
   }
   if (s.includes("printer")) {
-    return <Printer className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />;
+    return <Printer className="size-3.5 text-[#0F9D8A] shrink-0" strokeWidth={1.5} />;
   }
   if (s.includes("pc") || s.includes("laptop") || s.includes("hardware")) {
-    return <Laptop className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />;
+    return <Laptop className="size-3.5 text-[#0F9D8A] shrink-0" strokeWidth={1.5} />;
   }
   if (s.includes("account") || s.includes("ad")) {
-    return <Shield className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />;
+    return <Shield className="size-3.5 text-[#6E56CF] shrink-0" strokeWidth={1.5} />;
   }
   if (s.includes("erp")) {
-    return <Bug className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />;
+    return <Bug className="size-3.5 text-[#D97706] shrink-0" strokeWidth={1.5} />;
   }
   if (s.includes("request")) {
-    return <ArrowUpFromLine className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />;
+    return <ArrowUpFromLine className="size-3.5 text-[#2563EB] shrink-0" strokeWidth={1.5} />;
   }
   if (s.includes("asset")) {
     return <HardDrive className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />;
@@ -239,8 +266,14 @@ export function TopicBadge({
   iconSlug?: string | null;
   mono?: boolean;
 }) {
+  const isAsset = iconSlug === "asset";
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-sm border border-border bg-card px-2 text-[13px] font-normal leading-4 text-foreground whitespace-nowrap shrink-0">
+    <span
+      className={cn(
+        "inline-flex h-6 items-center gap-1.5 rounded-sm border border-border px-2 text-[13px] font-normal leading-4 text-foreground whitespace-nowrap shrink-0",
+        isAsset ? "bg-muted/50" : "bg-card"
+      )}
+    >
       {iconSlug === "tag" ? (
         <Tag className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />
       ) : (

@@ -4,13 +4,19 @@ import React from "react";
 import { CheckCircle2, Clock, CornerUpLeft } from "lucide-react";
 
 import { cn } from "@/lib/cn";
-import { getDepartmentLabel, getTicketTier, STATUS_LABELS } from "@/lib/formatters";
+import {
+  formatRelativeTime,
+  getDepartmentLabel,
+  PRIORITY_LABELS,
+  STATUS_LABELS,
+} from "@/lib/formatters";
 import { Ticket } from "@/lib/types";
 import {
   Checkbox,
   CompanyLogo,
+  PriorityGlyph,
   SlaBadge,
-  TierBadge,
+  StatusBadge,
   TopicBadge,
 } from "@/components/ui/primitives";
 
@@ -65,9 +71,10 @@ export function QueueRow({
   focused = false,
   highlighted = false,
 }: QueueRowProps) {
-  const tier = getTicketTier(ticket);
   const deptLabel = getDepartmentLabel(ticket);
   const isUnread = ticket.status === "NEW";
+  const isMutedTerminal =
+    ticket.status === "CLOSED" || ticket.status === "CANCELLED";
 
   if (layout === "compact") {
     return (
@@ -130,8 +137,9 @@ export function QueueRow({
       }
       className={cn(
         "anim-fade-up cursor-pointer grid grid-cols-[16px_16px_88px_minmax(220px,1fr)_minmax(260px,1.4fr)] items-start gap-x-4 border-b border-border-subtle px-4 py-3 min-h-[72px] last:border-b-0 bg-card transition-colors duration-1000 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        isMutedTerminal && "opacity-75",
         highlighted && "bg-muted",
-        (selected || focused) && "bg-muted border-l-2 border-l-foreground"
+        (selected || focused) && "bg-muted border-l-2 border-l-foreground opacity-100"
       )}
     >
       <Checkbox
@@ -147,7 +155,7 @@ export function QueueRow({
         <SlaBadge ticket={ticket} />
       </div>
 
-      {/* Customer Cell */}
+      {/* Requester Cell */}
       <div className="min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <CompanyLogo name={deptLabel} />
@@ -158,15 +166,26 @@ export function QueueRow({
             <span className="text-muted-foreground"> / {ticket.requester.full_name}</span>
           </div>
         </div>
-        <div className="mt-1.5 pl-8">
-          <TierBadge tier={tier} />
+        <div className="mt-1.5 pl-8 flex items-center gap-1.5 text-meta">
+          <PriorityGlyph priority={ticket.priority} />
+          <span>{PRIORITY_LABELS[ticket.priority]}</span>
+          <span className="text-faint" aria-hidden>·</span>
+          <span className="text-meta-faint tabular-nums">
+            {formatRelativeTime(ticket.updated_at || ticket.created_at)}
+          </span>
         </div>
       </div>
 
       {/* Topic Cell */}
       <div className="min-w-0">
-        <div className="text-body-strong truncate">{ticket.title}</div>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-meta font-mono tabular-nums shrink-0">
+            {ticket.ticket_code}
+          </span>
+          <span className="text-body-strong truncate">{ticket.title}</span>
+        </div>
         <div className="mt-1.5 flex items-center gap-2 overflow-hidden">
+          <StatusBadge status={ticket.status} />
           {ticket.category && (
             <TopicBadge
               label={ticket.category.name}
@@ -180,7 +199,6 @@ export function QueueRow({
               mono
             />
           )}
-          <TopicBadge label={STATUS_LABELS[ticket.status]} iconSlug="tag" />
         </div>
       </div>
     </div>

@@ -7,7 +7,9 @@ import {
   BarChart3,
   Bell,
   BellRing,
+  BookOpen,
   Inbox,
+  Loader2,
   LogOut,
   Plus,
   Settings,
@@ -16,6 +18,9 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+
+import { WorkspaceBootSkeleton } from "@/components/LoadingSkeletons";
+import { useNavigationProgress } from "@/components/NavigationProgress";
 
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/lib/auth-context";
@@ -45,6 +50,7 @@ export function AppShell({
   const { user, loading, logout } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
+  const { isNavigating, pendingPath, startNavigation } = useNavigationProgress();
 
   const [muted, setMuted] = useState(false);
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>("default");
@@ -60,9 +66,10 @@ export function AppShell({
 
   useEffect(() => {
     if (!loading && !user) {
+      startNavigation("/login");
       router.replace("/login");
     }
-  }, [loading, user, router]);
+  }, [loading, user, router, startNavigation]);
 
   useRealtime((evt) => {
     if (!user) return;
@@ -82,9 +89,10 @@ export function AppShell({
       evt.type === "ULTRAVIEW_REQUESTED";
 
     playNotificationChime(urgent);
-    triggerDesktopNotification(`Helpdesk · ${code}`, summary, href, (target) =>
-      router.push(target)
-    );
+    triggerDesktopNotification(`Helpdesk · ${code}`, summary, href, (target) => {
+      startNavigation(target);
+      router.push(target);
+    });
 
     setToast({ id: Date.now(), text: summary, href });
     if (toastTimerRef.current !== null) {
@@ -115,11 +123,7 @@ export function AppShell({
   };
 
   if (loading || !user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <span className="text-meta-faint">Loading workspace...</span>
-      </div>
-    );
+    return <WorkspaceBootSkeleton pathname={pathname} />;
   }
 
   const hasItAccess = isItRole(user.role);
@@ -141,6 +145,13 @@ export function AppShell({
       active: pathname.startsWith("/portal"),
     },
     {
+      href: "/workspace/kb",
+      label: "Knowledge",
+      icon: BookOpen,
+      visible: hasItAccess,
+      active: pathname.startsWith("/workspace/kb"),
+    },
+    {
       href: "/workspace/analytics",
       label: "Analytics",
       icon: BarChart3,
@@ -159,11 +170,6 @@ export function AppShell({
   return (
     <div className="min-h-dvh flex flex-col bg-background text-foreground">
       <header className="sticky top-0 z-30 h-11 bg-card border-b border-border px-4 flex items-center justify-between gap-4 shrink-0 relative">
-        <span
-          key={pathname}
-          aria-hidden
-          className="anim-topbar-progress pointer-events-none absolute left-0 right-0 bottom-0 h-[1.5px] bg-foreground"
-        />
         <div className="flex items-center gap-4 min-w-0">
           <Link
             href={hasItAccess ? "/workspace" : "/portal"}
@@ -180,6 +186,8 @@ export function AppShell({
           <nav className="flex items-center gap-1 overflow-x-auto">
             {navItems.map((item) => {
               const Icon = item.icon;
+              const isPendingTarget =
+                isNavigating && !item.active && pendingPath === item.href;
               return (
                 <Link
                   key={item.href}
@@ -188,10 +196,16 @@ export function AppShell({
                     "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-sm text-[13px] font-medium transition-[background-color,color,transform] duration-100 active:translate-y-[0.5px] whitespace-nowrap",
                     item.active
                       ? "bg-muted text-foreground"
+                      : isPendingTarget
+                      ? "bg-muted/70 text-foreground"
                       : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                   )}
                 >
-                  <Icon className="size-3.5" strokeWidth={1.5} />
+                  {isPendingTarget ? (
+                    <Loader2 className="size-3.5 animate-spin text-ring" strokeWidth={1.75} />
+                  ) : (
+                    <Icon className="size-3.5" strokeWidth={1.5} />
+                  )}
                   <span>{item.label}</span>
                 </Link>
               );
@@ -243,6 +257,7 @@ export function AppShell({
             variant="ghost"
             size="sm"
             onClick={() => {
+              startNavigation("/login");
               logout();
               router.push("/login");
             }}
@@ -270,6 +285,7 @@ export function AppShell({
             onClick={() => {
               const target = toast.href;
               setToast(null);
+              startNavigation(target);
               router.push(target);
             }}
             className="truncate text-left hover:underline"

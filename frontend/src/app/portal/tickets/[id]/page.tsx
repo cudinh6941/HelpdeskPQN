@@ -17,7 +17,8 @@ import {
   PriorityGlyph,
   SkeletonRow,
   SlaBadge,
-  TierBadge,
+  StatusBadge,
+  TopicBadge,
   inputBaseClass,
 } from "@/components/ui/primitives";
 import { api, buildAttachmentUrl } from "@/lib/api";
@@ -25,9 +26,7 @@ import {
   formatDateTime,
   formatRelativeTime,
   formatUltraViewId,
-  getTicketTier,
   PRIORITY_LABELS,
-  STATUS_LABELS,
 } from "@/lib/formatters";
 import { Attachment, TicketDetail } from "@/lib/types";
 import { useRealtime } from "@/lib/use-realtime";
@@ -454,21 +453,19 @@ export default function PortalTicketDetailPage() {
             <div className="space-y-4">
               <div className="space-y-1">
                 <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
-                  <span className="text-meta">Tier</span>
-                  <div>
-                    <TierBadge tier={getTicketTier(ticket)} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
-                  <span className="text-meta">SLA</span>
-                  <div>
-                    <SlaBadge ticket={ticket} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
                   <span className="text-meta">Status</span>
-                  <span className="text-body">{STATUS_LABELS[ticket.status]}</span>
+                  <div>
+                    <StatusBadge status={ticket.status} />
+                  </div>
                 </div>
+                {ticket.status !== "CANCELLED" && (
+                  <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
+                    <span className="text-meta">SLA</span>
+                    <div>
+                      <SlaBadge ticket={ticket} />
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
                   <span className="text-meta">Priority</span>
                   <div className="flex items-center gap-1.5 text-body">
@@ -478,20 +475,39 @@ export default function PortalTicketDetailPage() {
                 </div>
                 <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
                   <span className="text-meta">Category</span>
-                  <span className="text-body truncate">{ticket.category?.name || "—"}</span>
+                  <div>
+                    {ticket.category ? (
+                      <TopicBadge
+                        label={ticket.category.name}
+                        iconSlug={ticket.category.slug}
+                      />
+                    ) : (
+                      <span className="text-body text-faint">—</span>
+                    )}
+                  </div>
                 </div>
+                {ticket.asset_code && (
+                  <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
+                    <span className="text-meta">Asset Code</span>
+                    <div>
+                      <TopicBadge label={ticket.asset_code} iconSlug="asset" mono />
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
                   <span className="text-meta">Assignee</span>
-                  <span className="text-body truncate">
+                  <span className={ticket.assignee ? "text-body truncate" : "text-body text-faint truncate"}>
                     {ticket.assignee?.full_name || "Unassigned"}
                   </span>
                 </div>
-                <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
-                  <span className="text-meta">Due at</span>
-                  <span className="text-body tabular-nums">
-                    {formatDateTime(ticket.resolution_due_at)}
-                  </span>
-                </div>
+                {ticket.status !== "CANCELLED" && ticket.status !== "CLOSED" && (
+                  <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
+                    <span className="text-meta">Due at</span>
+                    <span className="text-body tabular-nums">
+                      {formatDateTime(ticket.resolution_due_at)}
+                    </span>
+                  </div>
+                )}
                 <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
                   <span className="text-meta">UltraViewer</span>
                   <span className="text-body font-mono tabular-nums truncate">

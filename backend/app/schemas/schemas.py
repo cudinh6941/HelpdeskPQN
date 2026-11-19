@@ -4,7 +4,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.models import OutboxStatus, TicketPriority, TicketStatus, UserRole
+from app.models.models import KbVisibility, OutboxStatus, TicketPriority, TicketStatus, UserRole
 
 
 class DepartmentOut(BaseModel):
@@ -140,6 +140,7 @@ class AttachmentOut(BaseModel):
     id: uuid.UUID
     ticket_id: Optional[uuid.UUID] = None
     comment_id: Optional[uuid.UUID] = None
+    kb_article_id: Optional[uuid.UUID] = None
     file_name: str
     content_type: str
     size_bytes: int
@@ -153,6 +154,7 @@ class PresignedUploadRequest(BaseModel):
     content_type: str = Field(default="image/png", max_length=120)
     size_bytes: int = Field(default=0, ge=0, le=25 * 1024 * 1024)
     ticket_id: Optional[uuid.UUID] = None
+    kb_article_id: Optional[uuid.UUID] = None
 
 
 class PresignedUploadResponse(BaseModel):
@@ -218,6 +220,10 @@ class UltraViewProvideRequest(BaseModel):
 class TicketStatusUpdate(BaseModel):
     status: TicketStatus
     note: Optional[str] = Field(None, max_length=2000)
+
+
+class TicketPriorityUpdate(BaseModel):
+    priority: TicketPriority
 
 
 class TicketAssignRequest(BaseModel):
@@ -329,6 +335,68 @@ class KbArticleCreate(BaseModel):
     title: str = Field(..., min_length=3, max_length=200)
     keywords: list[str] = Field(default_factory=list)
     steps: list[str] = Field(..., min_length=1)
+
+
+class KbSourceTicketBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    ticket_code: str
+    title: str
+
+
+class KbArticleCreateRequest(BaseModel):
+    title: str = Field(..., min_length=3, max_length=255)
+    category_id: Optional[uuid.UUID] = None
+    visibility: KbVisibility = KbVisibility.INTERNAL
+    symptoms: Optional[str] = Field(None, max_length=10000)
+    root_cause: Optional[str] = Field(None, max_length=10000)
+    steps: list[str] = Field(default_factory=list)
+    notes: Optional[str] = Field(None, max_length=20000)
+    keywords: list[str] = Field(default_factory=list)
+    source_ticket_id: Optional[uuid.UUID] = None
+    attachment_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class KbArticleUpdateRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    category_id: Optional[uuid.UUID] = None
+    visibility: Optional[KbVisibility] = None
+    symptoms: Optional[str] = Field(None, max_length=10000)
+    root_cause: Optional[str] = Field(None, max_length=10000)
+    steps: Optional[list[str]] = None
+    notes: Optional[str] = Field(None, max_length=20000)
+    keywords: Optional[list[str]] = None
+    source_ticket_id: Optional[uuid.UUID] = None
+    attachment_ids: Optional[list[uuid.UUID]] = None
+
+
+class KbArticleDetailOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    category_id: Optional[uuid.UUID] = None
+    category: Optional[CategoryOut] = None
+    visibility: KbVisibility
+    title: str
+    symptoms: Optional[str] = None
+    root_cause: Optional[str] = None
+    steps: list[str] = Field(default_factory=list)
+    notes: Optional[str] = None
+    keywords: list[str] = Field(default_factory=list)
+    source_ticket_id: Optional[uuid.UUID] = None
+    source_ticket: Optional[KbSourceTicketBrief] = None
+    author_id: Optional[uuid.UUID] = None
+    author: Optional[UserBriefOut] = None
+    updated_by_id: Optional[uuid.UUID] = None
+    updated_by: Optional[UserBriefOut] = None
+    is_active: bool
+    attachments: list[AttachmentOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class KbArticleListResponse(BaseModel):
+    items: list[KbArticleDetailOut]
+    total: int
 
 
 class AutomationSettingsOut(BaseModel):

@@ -9,6 +9,8 @@ from app.models.models import (
     BusinessCalendar,
     Category,
     Department,
+    KbArticle,
+    KbVisibility,
     SlaPolicy,
     SupportGroup,
     SupportGroupMember,
@@ -110,9 +112,40 @@ DEFAULT_KB_BY_SLUG: dict[str, list[dict]] = {
 }
 
 
+DEFAULT_INTERNAL_RUNBOOKS: list[dict] = [
+    {
+        "category_slug": "printer-scanner",
+        "title": "Fix lỗi kẹt hàng đợi in (Print Spooler) trên Windows 10/11 không hủy được lệnh",
+        "symptoms": "Người dùng bấm Cancel lệnh in trong Devices and Printers nhưng trạng thái kẹt ở 'Deleting' mãi không mất, không in được các file sau.",
+        "root_cause": "Dịch vụ Print Spooler giữ lock file .SPL / .SHD trong thư mục C:\\Windows\\System32\\spool\\PRINTERS.",
+        "steps": [
+            "Mở PowerShell hoặc CMD với quyền Administrator trên máy trạm (hoặc qua UltraViewer).",
+            "Dừng service spooler, xóa sạch file tạm trong thư mục PRINTERS rồi khởi động lại service.",
+            "Kiểm tra lại queue máy in đã trống hoàn toàn trước khi cho người dùng in thử.",
+        ],
+        "notes": "net stop spooler\ndel /Q /F %systemroot%\\System32\\spool\\PRINTERS\\*.*\nnet start spooler",
+        "keywords": ["spooler", "print", "kẹt lệnh in", "deleting", "powershell", "cmd"],
+    },
+    {
+        "category_slug": "account-email-ad",
+        "title": "Truy vết nguồn gây khóa tài khoản Active Directory (Event ID 4740)",
+        "symptoms": "Tài khoản nhân viên liên tục bị Lockout dù vừa mở khóa xong vài phút trước.",
+        "root_cause": "Thường do Outlook/Wifi trên điện thoại hoặc một máy cũ vẫn lưu mật khẩu AD cũ và tự động thử đăng nhập lặp lại.",
+        "steps": [
+            "Remote vào Domain Controller mở Event Viewer -> Security log hoặc chạy PowerShell lọc Event ID 4740.",
+            "Xem trường Caller Computer Name để xác định đúng tên máy hoặc thiết bị đang gửi sai mật khẩu.",
+            "Hướng dẫn nhân viên xóa Credential Manager trên Windows hoặc cập nhật mật khẩu mới trên Outlook/Mail điện thoại.",
+        ],
+        "notes": "Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4740} -MaxEvents 10 |\n  Select-Object TimeCreated, @{N='User';E={$_.Properties[0].Value}}, @{N='Caller';E={$_.Properties[1].Value}}",
+        "keywords": ["lockout", "4740", "ad", "event viewer", "khóa tài khoản", "powershell"],
+    },
+]
+
+
 async def ensure_kb_articles_seeded(db: AsyncSession) -> None:
-    """Populate default self-help KB articles in Category.form_schema if empty."""
+    """Populate default self-help KB articles in Category.form_schema and kb_articles table."""
     cats = list((await db.execute(select(Category))).scalars().all())
+    cat_by_slug = {c.slug: c for c in cats}
     changed = False
     for cat in cats:
         existing_schema = dict(cat.form_schema or {})
@@ -120,6 +153,59 @@ async def ensure_kb_articles_seeded(db: AsyncSession) -> None:
             existing_schema["kb_articles"] = DEFAULT_KB_BY_SLUG[cat.slug]
             cat.form_schema = existing_schema
             changed = True
+
+    existing_kb_count = (await db.execute(select(func.count(KbArticle.id)))).scalar_one()
+    if existing_kb_count == 0:
+        it_author = (
+            await db.execute(
+                select(User)
+                .where(User.role.in_([UserRole.IT_LEAD, UserRole.SYS_ADMIN, UserRole.IT_AGENT]))
+                .order_by(User.created_at)
+            )
+        ).scalars().first()
+        author_id = it_author.id if it_author else None
+        now = datetime.now(timezone.utc)
+
+        for cat in cats:
+            schema_articles = list((cat.form_schema or {}).get("kb_articles") or [])
+            for raw in schema_articles:
+                title = str(raw.get("title") or "").strip()
+                if not title:
+                    continue
+                db.add(
+                    KbArticle(
+                        category_id=cat.id,
+                        visibility=KbVisibility.PUBLIC,
+                        title=title,
+                        keywords=list(raw.get("keywords") or []),
+                        steps=list(raw.get("steps") or []),
+                        author_id=author_id,
+                        updated_by_id=author_id,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+        for rb in DEFAULT_INTERNAL_RUNBOOKS:
+            cat = cat_by_slug.get(rb["category_slug"])
+            db.add(
+                KbArticle(
+                    category_id=cat.id if cat else None,
+                    visibility=KbVisibility.INTERNAL,
+                    title=rb["title"],
+                    symptoms=rb.get("symptoms"),
+                    root_cause=rb.get("root_cause"),
+                    steps=list(rb.get("steps") or []),
+                    notes=rb.get("notes"),
+                    keywords=list(rb.get("keywords") or []),
+                    author_id=author_id,
+                    updated_by_id=author_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        changed = True
+
     if changed:
         await db.commit()
 

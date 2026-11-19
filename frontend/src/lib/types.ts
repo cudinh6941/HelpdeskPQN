@@ -69,11 +69,42 @@ export interface SlaPolicy {
   is_active: boolean;
 }
 
+export type KbVisibility = "PUBLIC" | "INTERNAL";
+
 export interface KbArticle {
   id: string;
   title: string;
   keywords: string[];
   steps: string[];
+}
+
+export interface KbSourceTicketBrief {
+  id: string;
+  ticket_code: string;
+  title: string;
+}
+
+export interface KbArticleDetail {
+  id: string;
+  category_id?: string | null;
+  category?: Category | null;
+  visibility: KbVisibility;
+  title: string;
+  symptoms?: string | null;
+  root_cause?: string | null;
+  steps: string[];
+  notes?: string | null;
+  keywords: string[];
+  source_ticket_id?: string | null;
+  source_ticket?: KbSourceTicketBrief | null;
+  author_id?: string | null;
+  author?: UserBrief | null;
+  updated_by_id?: string | null;
+  updated_by?: UserBrief | null;
+  is_active: boolean;
+  attachments: Attachment[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AutomationSettings {
@@ -101,6 +132,7 @@ export interface Attachment {
   id: string;
   ticket_id?: string | null;
   comment_id?: string | null;
+  kb_article_id?: string | null;
   file_name: string;
   content_type: string;
   size_bytes: number;

@@ -19,13 +19,14 @@ export interface PasteUploaderHandle {
 
 interface Props {
   ticketId?: string;
+  kbArticleId?: string;
   attachments: Attachment[];
   onChange: (next: Attachment[]) => void;
   compact?: boolean;
 }
 
 export const PasteImageUploader = forwardRef<PasteUploaderHandle, Props>(
-  function PasteImageUploader({ ticketId, attachments, onChange, compact = false }, ref) {
+  function PasteImageUploader({ ticketId, kbArticleId, attachments, onChange, compact = false }, ref) {
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement | null>(null);
@@ -41,7 +42,7 @@ export const PasteImageUploader = forwardRef<PasteUploaderHandle, Props>(
             file.name && file.name !== "image.png"
               ? file.name
               : `pasted-${Date.now()}.png`;
-          const att = await api.uploadAttachment(file, name, ticketId);
+          const att = await api.uploadAttachment(file, name, ticketId, kbArticleId);
           uploaded.push(att);
         }
         onChange([...attachments, ...uploaded]);

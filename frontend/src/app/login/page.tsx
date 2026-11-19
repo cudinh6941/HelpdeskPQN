@@ -8,11 +8,13 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { isItRole, ROLE_LABELS } from "@/lib/formatters";
 import { DemoAccount } from "@/lib/types";
+import { useNavigationProgress } from "@/components/NavigationProgress";
 import { Button, inputBaseClass } from "@/components/ui/primitives";
 
 export default function LoginPage() {
   const { user, login } = useAuth();
   const router = useRouter();
+  const { startNavigation } = useNavigationProgress();
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -22,9 +24,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (user) {
-      router.replace(isItRole(user.role) ? "/workspace" : "/portal");
+      const target = isItRole(user.role) ? "/workspace" : "/portal";
+      startNavigation(target);
+      router.replace(target);
     }
-  }, [user, router]);
+  }, [user, router, startNavigation]);
 
   useEffect(() => {
     api
@@ -38,7 +42,9 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       const loggedUser = await login(u, p);
-      router.replace(isItRole(loggedUser.role) ? "/workspace" : "/portal");
+      const target = isItRole(loggedUser.role) ? "/workspace" : "/portal";
+      startNavigation(target);
+      router.replace(target);
     } catch (err: unknown) {
       setError(
         err instanceof Error

@@ -5,11 +5,10 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  BookOpen,
   Check,
   Copy,
-  Hash,
   Lock,
-  MessageSquare,
   Monitor,
   Paperclip,
   PanelRight,
@@ -18,15 +17,13 @@ import {
 } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
-import {
-  DiscussionMessage,
-  DiscussionPopover,
-} from "@/components/DiscussionPopover";
+import { useNavigationProgress } from "@/components/NavigationProgress";
 import {
   PasteImageUploader,
   PasteUploaderHandle,
 } from "@/components/PasteImageUploader";
 import { QueueRow } from "@/components/QueueRow";
+import { SaveTicketToKbModal } from "@/components/SaveTicketToKbModal";
 import { TicketTimeline } from "@/components/TicketTimeline";
 import {
   Avatar,
@@ -34,7 +31,8 @@ import {
   PriorityGlyph,
   SkeletonRow,
   SlaBadge,
-  TierBadge,
+  StatusBadge,
+  TopicBadge,
   selectBaseClass,
 } from "@/components/ui/primitives";
 import { api, buildAttachmentUrl } from "@/lib/api";
@@ -44,12 +42,11 @@ import {
   formatDurationCompact,
   formatRelativeTime,
   formatUltraViewId,
-  getTicketTier,
   PRIORITY_LABELS,
-  STATUS_LABELS,
 } from "@/lib/formatters";
 import {
   Attachment,
+  KbArticleDetail,
   Ticket,
   TicketDetail,
   TicketMetadata,
@@ -64,6 +61,7 @@ export default function WorkspaceTicketDetailPage() {
   const params = useParams<{ id: string }>();
   const ticketId = params.id;
   const router = useRouter();
+  const { startNavigation } = useNavigationProgress();
 
   const [queueTickets, setQueueTickets] = useState<Ticket[]>([]);
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
@@ -81,9 +79,13 @@ export default function WorkspaceTicketDetailPage() {
   const [sending, setSending] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
 
-  // Discussion popover (§8) & mobile properties sheet (§13)
-  const [discussionOpen, setDiscussionOpen] = useState(false);
+  // Mobile properties sheet (§13) & Knowledge Base helpers
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
+  const [saveKbOpen, setSaveKbOpen] = useState(false);
+  const [kbInsertOpen, setKbInsertOpen] = useState(false);
+  const [kbInsertQuery, setKbInsertQuery] = useState("");
+  const [kbArticles, setKbArticles] = useState<KbArticleDetail[]>([]);
+  const [kbLoaded, setKbLoaded] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -208,8 +210,48 @@ export default function WorkspaceTicketDetailPage() {
     }
   };
 
+  const handlePriorityChange = async (nextPriority: TicketPriority) => {
+    if (!ticket || ticket.priority === nextPriority) return;
+    setActionBusy(true);
+    try {
+      await api.updateTicketPriority(ticketId, nextPriority);
+      await loadData();
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const currentDraft = composerTab === "reply" ? replyDraft : noteDraft;
   const setCurrentDraft = composerTab === "reply" ? setReplyDraft : setNoteDraft;
+
+  const handleToggleKbInsert = async () => {
+    const next = !kbInsertOpen;
+    setKbInsertOpen(next);
+    if (next && !kbLoaded) {
+      try {
+        const res = await api.listKbArticles();
+        setKbArticles(res.items);
+        setKbLoaded(true);
+      } catch {
+        // ignore transient error
+      }
+    }
+  };
+
+  const handleInsertKbArticle = (art: KbArticleDetail) => {
+    const lines: string[] = [art.title];
+    if (art.steps.length > 0) {
+      lines.push(...art.steps.map((s, idx) => `${idx + 1}. ${s}`));
+    }
+    if (composerTab === "note" && art.notes) {
+      lines.push("", art.notes);
+    }
+    const snippet = lines.join("\n");
+    setCurrentDraft((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${snippet}` : snippet));
+    setKbInsertOpen(false);
+    setKbInsertQuery("");
+    window.setTimeout(() => composerRef.current?.focus(), 30);
+  };
   const currentAttachments =
     composerTab === "reply" ? replyAttachments : noteAttachments;
   const setCurrentAttachments =
@@ -255,27 +297,6 @@ export default function WorkspaceTicketDetailPage() {
     }
   };
 
-  const discussionMessages: DiscussionMessage[] = useMemo(() => {
-    if (!ticket) return [];
-    return ticket.comments
-      .filter((c) => c.is_internal)
-      .map((c) => ({
-        id: c.id,
-        author: c.author.full_name,
-        body: c.body,
-        createdAt: c.created_at,
-      }));
-  }, [ticket]);
-
-  const handleSendDiscussionMessage = async (text: string) => {
-    await api.addComment(ticketId, {
-      body: `[#engineering] ${text}`,
-      is_internal: true,
-      attachment_ids: [],
-    });
-    await loadData();
-  };
-
   const copyTicketCode = async () => {
     if (!ticket) return;
     try {
@@ -291,44 +312,73 @@ export default function WorkspaceTicketDetailPage() {
     <div className="space-y-4">
       <div className="space-y-1">
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
-          <span className="text-meta">Tier</span>
-          <div>
-            <TierBadge tier={getTicketTier(ticket)} />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
-          <span className="text-meta">SLA</span>
-          <div>
-            <SlaBadge ticket={ticket} />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
           <span className="text-meta">Status</span>
-          <span className="text-body truncate">{STATUS_LABELS[ticket.status]}</span>
+          <div>
+            <StatusBadge status={ticket.status} />
+          </div>
         </div>
+
+        {ticket.status !== "CANCELLED" && (
+          <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
+            <span className="text-meta">SLA</span>
+            <div>
+              <SlaBadge ticket={ticket} />
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
           <span className="text-meta">Priority</span>
-          <div className="flex items-center gap-1.5 text-body">
+          <div className="flex items-center gap-1 min-w-0">
             <PriorityGlyph priority={ticket.priority} />
-            <span>{PRIORITY_LABELS[ticket.priority]}</span>
+            <select
+              disabled={
+                actionBusy ||
+                ticket.status === "CLOSED" ||
+                ticket.status === "CANCELLED"
+              }
+              value={ticket.priority}
+              onChange={(e) =>
+                void handlePriorityChange(e.target.value as TicketPriority)
+              }
+              aria-label="Ticket priority"
+              className={cn(
+                selectBaseClass,
+                "h-7 border-transparent bg-transparent hover:border-border hover:bg-card px-1.5"
+              )}
+            >
+              {PRIORITY_ORDER.map((p) => (
+                <option key={p} value={p}>
+                  {PRIORITY_LABELS[p]}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
-          <span className="text-meta">Product Area</span>
-          <span className={ticket.category ? "text-body truncate" : "text-body text-faint"}>
-            {ticket.category?.name || "—"}
-          </span>
+          <span className="text-meta">Category</span>
+          <div>
+            {ticket.category ? (
+              <TopicBadge
+                label={ticket.category.name}
+                iconSlug={ticket.category.slug}
+              />
+            ) : (
+              <span className="text-body text-faint">—</span>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
           <span className="text-meta">Asset Code</span>
-          <span className={ticket.asset_code ? "text-body font-mono tabular-nums" : "text-body text-faint"}>
-            {ticket.asset_code || "—"}
-          </span>
+          <div>
+            {ticket.asset_code ? (
+              <TopicBadge label={ticket.asset_code} iconSlug="asset" mono />
+            ) : (
+              <span className="text-body text-faint">—</span>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
@@ -375,12 +425,14 @@ export default function WorkspaceTicketDetailPage() {
           </select>
         </div>
 
-        <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
-          <span className="text-meta">Paused SLA</span>
-          <span className="text-body tabular-nums">
-            {formatDurationCompact(ticket.total_paused_seconds)}
-          </span>
-        </div>
+        {ticket.total_paused_seconds > 0 && (
+          <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
+            <span className="text-meta">Paused SLA</span>
+            <span className="text-body tabular-nums">
+              {formatDurationCompact(ticket.total_paused_seconds)}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Remote Support (UltraViewer) */}
@@ -455,28 +507,7 @@ export default function WorkspaceTicketDetailPage() {
         )}
       </div>
 
-      {/* Discussions subsection (§6) */}
-      <div className="pt-2 space-y-1">
-        <div className="flex items-center gap-1.5 text-meta">
-          <MessageSquare className="size-3.5 text-faint" strokeWidth={1.5} />
-          <span>Discussions</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setDiscussionOpen(true)}
-          className="w-full h-8 px-2 -mx-2 rounded-sm hover:bg-muted flex items-center justify-between text-left transition-colors duration-75"
-        >
-          <span className="flex items-center gap-1.5 text-body truncate">
-            <Hash className="size-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />
-            <span className="truncate">engineering</span>
-          </span>
-          <span className="text-meta-faint tabular-nums">
-            {discussionMessages.length}
-          </span>
-        </button>
-      </div>
-
-      {/* Customer Block (§6) */}
+      {/* Requester Block (§6) */}
       <div className="border-t border-border pt-4 space-y-1.5">
         <div className="flex items-center gap-2 pb-1">
           <Avatar name={ticket.requester.full_name} />
@@ -548,7 +579,11 @@ export default function WorkspaceTicketDetailPage() {
                     ticket={item}
                     selected={item.id === ticketId}
                     layout="compact"
-                    onClick={() => router.push(`/workspace/tickets/${item.id}`)}
+                    onClick={() => {
+                      const target = `/workspace/tickets/${item.id}`;
+                      startNavigation(target);
+                      router.push(target);
+                    }}
                   />
                 ))}
               </div>
@@ -580,6 +615,15 @@ export default function WorkspaceTicketDetailPage() {
 
             {ticket && (
               <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="outline"
+                  onClick={() => setSaveKbOpen(true)}
+                  title="Save solution or troubleshooting tip to Knowledge Base"
+                >
+                  <BookOpen className="size-3.5" strokeWidth={1.5} />
+                  <span className="hidden lg:inline">Save as KB</span>
+                </Button>
+
                 {ticket.status !== "CLOSED" &&
                   ticket.status !== "CANCELLED" &&
                   ticket.status !== "RESOLVED" && (
@@ -952,7 +996,7 @@ export default function WorkspaceTicketDetailPage() {
                   </div>
                 )}
 
-                <div className="flex items-center justify-between pt-3 mt-1">
+                <div className="flex items-center justify-between pt-3 mt-1 relative">
                   <div className="flex items-center gap-3 text-faint">
                     <button
                       type="button"
@@ -962,7 +1006,69 @@ export default function WorkspaceTicketDetailPage() {
                     >
                       <Paperclip className="size-4" strokeWidth={1.5} />
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleKbInsert()}
+                      className="inline-flex items-center gap-1 text-[13px] hover:text-foreground transition-colors duration-75"
+                      title="Insert solution steps from Knowledge Base"
+                    >
+                      <BookOpen className="size-3.5" strokeWidth={1.5} />
+                      <span>Insert KB</span>
+                    </button>
                   </div>
+
+                  {kbInsertOpen && (
+                    <div className="anim-popover absolute left-0 bottom-11 z-30 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover shadow-popover overflow-hidden">
+                      <div className="p-2 border-b border-border flex items-center gap-2">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={kbInsertQuery}
+                          onChange={(e) => setKbInsertQuery(e.target.value)}
+                          placeholder="Search KB tip to insert..."
+                          className="w-full h-7 px-2.5 rounded-sm border border-input bg-card text-[13px] text-foreground placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ring/20"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setKbInsertOpen(false)}
+                          className="text-faint hover:text-foreground shrink-0"
+                          aria-label="Close KB picker"
+                        >
+                          <X className="size-3.5" strokeWidth={1.5} />
+                        </button>
+                      </div>
+                      <div className="max-h-56 overflow-y-auto divide-y divide-border-subtle">
+                        {kbArticles
+                          .filter((a) => {
+                            const q = kbInsertQuery.trim().toLowerCase();
+                            if (!q) return true;
+                            return (
+                              a.title.toLowerCase().includes(q) ||
+                              a.keywords.some((k) => k.toLowerCase().includes(q))
+                            );
+                          })
+                          .slice(0, 8)
+                          .map((art) => (
+                            <button
+                              key={art.id}
+                              type="button"
+                              onClick={() => handleInsertKbArticle(art)}
+                              className="w-full text-left px-3 py-2 hover:bg-muted/60 transition-colors duration-75"
+                            >
+                              <p className="text-[13px] font-medium text-foreground truncate">
+                                {art.title}
+                              </p>
+                              <p className="text-[12px] text-muted-foreground truncate">
+                                {art.visibility === "INTERNAL" ? "IT Runbook" : "Self-Help"}
+                                {art.category ? ` · ${art.category.name}` : ""}
+                                {` · ${art.steps.length} steps`}
+                              </p>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
 
                   <Button
                     type="submit"
@@ -1013,15 +1119,14 @@ export default function WorkspaceTicketDetailPage() {
         </div>
       )}
 
-      {/* Discussion in #engineering Popover (§8) */}
-      <DiscussionPopover
-        open={discussionOpen}
-        onClose={() => setDiscussionOpen(false)}
-        channelName="#engineering"
-        startedAt={ticket?.created_at}
-        messages={discussionMessages}
-        onSendMessage={handleSendDiscussionMessage}
-      />
+      {ticket && (
+        <SaveTicketToKbModal
+          open={saveKbOpen}
+          onClose={() => setSaveKbOpen(false)}
+          ticket={ticket}
+          categories={meta?.categories || []}
+        />
+      )}
     </AppShell>
   );
 }

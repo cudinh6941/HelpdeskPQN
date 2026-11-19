@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.api.v1.router import api_v1_router
 from app.core.config import get_settings
@@ -27,6 +28,13 @@ async def lifespan(_app: FastAPI):
     if settings.DATABASE_URL.startswith("sqlite"):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            cols = (await conn.execute(text("PRAGMA table_info(ticket_attachments)"))).fetchall()
+            col_names = {row[1] for row in cols}
+            if "kb_article_id" not in col_names:
+                await conn.execute(text("ALTER TABLE ticket_attachments ADD COLUMN kb_article_id CHAR(32)"))
+                await conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_ticket_attachments_kb_article_id ON ticket_attachments (kb_article_id)")
+                )
 
     storage_service.ensure_bucket()
 

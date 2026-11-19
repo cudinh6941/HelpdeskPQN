@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, Inbox, Search, UserCheck } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
+import { useNavigationProgress } from "@/components/NavigationProgress";
 import { QueueRow } from "@/components/QueueRow";
 import { Button, PriorityGlyph, SkeletonRow } from "@/components/ui/primitives";
 import { api } from "@/lib/api";
@@ -21,6 +22,7 @@ const PRIORITY_ORDER: TicketPriority[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 export default function WorkspaceQueuePage() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const { startNavigation } = useNavigationProgress();
 
   const [filter, setFilter] = useState<QueueFilter>("ALL");
   const [search, setSearch] = useState("");
@@ -176,7 +178,11 @@ export default function WorkspaceQueuePage() {
       } else if (e.key === "Enter" && focusedIndex >= 0) {
         e.preventDefault();
         const t = flatVisibleTickets[focusedIndex];
-        if (t) router.push(`/workspace/tickets/${t.id}`);
+        if (t) {
+          const target = `/workspace/tickets/${t.id}`;
+          startNavigation(target);
+          router.push(target);
+        }
       } else if (e.key.toLowerCase() === "e" && focusedIndex >= 0) {
         e.preventDefault();
         const t = flatVisibleTickets[focusedIndex];
@@ -187,7 +193,7 @@ export default function WorkspaceQueuePage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [flatVisibleTickets, focusedIndex, checkedIds, router, loadTickets]);
+  }, [flatVisibleTickets, focusedIndex, checkedIds, router, loadTickets, startNavigation]);
 
   const filters: Array<{ id: QueueFilter; label: string }> = [
     { id: "ALL", label: "All" },
@@ -266,7 +272,7 @@ export default function WorkspaceQueuePage() {
             <span />
             <span />
             <span>SLA</span>
-            <span>Customer</span>
+            <span>Requester</span>
             <span>Topic</span>
           </div>
 
@@ -329,7 +335,11 @@ export default function WorkspaceQueuePage() {
                             highlighted={highlightedIds.has(ticket.id)}
                             checked={checkedIds.has(ticket.id)}
                             onCheckChange={(next) => toggleCheck(ticket.id, next)}
-                            onClick={() => router.push(`/workspace/tickets/${ticket.id}`)}
+                            onClick={() => {
+                              const target = `/workspace/tickets/${ticket.id}`;
+                              startNavigation(target);
+                              router.push(target);
+                            }}
                             layout="wide"
                           />
                         );
