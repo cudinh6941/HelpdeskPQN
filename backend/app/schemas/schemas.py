@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,6 +14,18 @@ class DepartmentOut(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool
+
+
+class DepartmentCreate(BaseModel):
+    code: str = Field(..., min_length=2, max_length=32)
+    name: str = Field(..., min_length=2, max_length=120)
+    description: Optional[str] = None
+
+
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=120)
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 class UserOut(BaseModel):
@@ -52,6 +64,16 @@ class TokenResponse(BaseModel):
     user: UserOut
 
 
+class ScopedTokenRequest(BaseModel):
+    scope: Literal["ws", "media"]
+
+
+class ScopedTokenResponse(BaseModel):
+    token: str
+    scope: str
+    expires_in: int
+
+
 class DemoAccountOut(BaseModel):
     username: str
     full_name: str
@@ -79,6 +101,40 @@ class SupportGroupUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=120)
     description: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+class SupportGroupMemberOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    user_id: uuid.UUID
+    is_lead: bool
+    user: UserBriefOut
+
+
+class SupportGroupDetailOut(SupportGroupOut):
+    members: list[SupportGroupMemberOut] = Field(default_factory=list)
+
+
+class SupportGroupMemberAdd(BaseModel):
+    user_id: uuid.UUID
+    is_lead: bool = False
+
+
+class BusinessCalendarOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    name: str
+    timezone: str
+    work_days: dict[str, list[str]]
+    holidays: list[str]
+    is_default: bool
+
+
+class BusinessCalendarUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=120)
+    timezone: Optional[str] = Field(None, min_length=2, max_length=64)
+    work_days: Optional[dict[str, list[str]]] = None
+    holidays: Optional[list[str]] = None
 
 
 class SlaPolicyOut(BaseModel):
@@ -208,8 +264,17 @@ class TicketCreate(BaseModel):
     asset_code: Optional[str] = Field(None, max_length=64)
     ultraview_id: Optional[str] = Field(None, max_length=32)
     ultraview_pass: Optional[str] = Field(None, max_length=32)
+    requester_id: Optional[uuid.UUID] = None
+    assign_to_me: bool = False
     custom_data: dict[str, Any] = Field(default_factory=dict)
     attachment_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class TicketUpdateRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    category_id: Optional[uuid.UUID] = None
+    asset_code: Optional[str] = Field(None, max_length=64)
+    support_group_id: Optional[uuid.UUID] = None
 
 
 class UltraViewProvideRequest(BaseModel):
@@ -220,6 +285,7 @@ class UltraViewProvideRequest(BaseModel):
 class TicketStatusUpdate(BaseModel):
     status: TicketStatus
     note: Optional[str] = Field(None, max_length=2000)
+    cascade_children: bool = True
 
 
 class TicketPriorityUpdate(BaseModel):
@@ -253,6 +319,7 @@ class TicketOut(BaseModel):
     support_group: Optional[SupportGroupOut] = None
     category_id: Optional[uuid.UUID] = None
     category: Optional[CategoryOut] = None
+    parent_ticket_id: Optional[uuid.UUID] = None
     asset_code: Optional[str] = None
     custom_data: dict[str, Any] = Field(default_factory=dict)
     first_response_due_at: Optional[datetime] = None
@@ -288,6 +355,67 @@ class TicketMetadataResponse(BaseModel):
     support_groups: list[SupportGroupOut]
     sla_policies: list[SlaPolicyOut]
     it_agents: list[UserBriefOut]
+    requesters: list[UserBriefOut] = Field(default_factory=list)
+
+
+class TicketBriefOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    ticket_code: str
+    title: str
+    status: TicketStatus
+    priority: TicketPriority
+    asset_code: Optional[str] = None
+    created_at: datetime
+
+
+class TicketRelatedResponse(BaseModel):
+    by_asset: list[TicketBriefOut] = Field(default_factory=list)
+    by_requester: list[TicketBriefOut] = Field(default_factory=list)
+    parent: Optional[TicketBriefOut] = None
+    children: list[TicketBriefOut] = Field(default_factory=list)
+
+
+class TicketLinkParentRequest(BaseModel):
+    parent_ticket_id: Optional[uuid.UUID] = None
+
+
+class TicketMergeRequest(BaseModel):
+    target_ticket_id: uuid.UUID
+    note: Optional[str] = Field(None, max_length=2000)
+
+
+class CannedResponseCreate(BaseModel):
+    shortcut: str = Field(..., min_length=1, max_length=50)
+    title: str = Field(..., min_length=2, max_length=150)
+    body: str = Field(..., min_length=2, max_length=10000)
+    category_id: Optional[uuid.UUID] = None
+    target_status: Optional[TicketStatus] = None
+    is_internal: bool = False
+
+
+class CannedResponseUpdate(BaseModel):
+    shortcut: Optional[str] = Field(None, min_length=1, max_length=50)
+    title: Optional[str] = Field(None, min_length=2, max_length=150)
+    body: Optional[str] = Field(None, min_length=2, max_length=10000)
+    category_id: Optional[uuid.UUID] = None
+    target_status: Optional[TicketStatus] = None
+    is_internal: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class CannedResponseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    shortcut: str
+    title: str
+    body: str
+    category_id: Optional[uuid.UUID] = None
+    target_status: Optional[TicketStatus] = None
+    is_internal: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
 
 
 class OutboxEventOut(BaseModel):
@@ -306,10 +434,61 @@ class OutboxEventOut(BaseModel):
 
 
 class UserRoleUpdate(BaseModel):
-    role: UserRole
+    role: Optional[UserRole] = None
+    full_name: Optional[str] = Field(None, min_length=2, max_length=150)
+    department_id: Optional[uuid.UUID] = None
     is_active: Optional[bool] = None
-    telegram_chat_id: Optional[str] = None
-    zalo_user_id: Optional[str] = None
+    telegram_chat_id: Optional[str] = Field(None, max_length=64)
+    zalo_user_id: Optional[str] = Field(None, max_length=64)
+
+
+class AdminUserCreate(BaseModel):
+    username: str = Field(..., min_length=2, max_length=100)
+    email: str = Field(..., min_length=3, max_length=180)
+    full_name: str = Field(..., min_length=2, max_length=150)
+    password: str = Field(..., min_length=6, max_length=200)
+    role: UserRole = UserRole.END_USER
+    department_id: Optional[uuid.UUID] = None
+    telegram_chat_id: Optional[str] = Field(None, max_length=64)
+    zalo_user_id: Optional[str] = Field(None, max_length=64)
+
+
+class UserProfileUpdate(BaseModel):
+    telegram_chat_id: Optional[str] = Field(None, max_length=64)
+    zalo_user_id: Optional[str] = Field(None, max_length=64)
+
+
+class NotificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    user_id: uuid.UUID
+    ticket_id: Optional[uuid.UUID] = None
+    event_type: str
+    title: str
+    body: str
+    link_url: str
+    is_read: bool
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationOut]
+    unread_count: int
+
+
+class TicketBulkActionRequest(BaseModel):
+    ticket_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=100)
+    action: Literal["claim", "assign", "status", "priority"]
+    assignee_id: Optional[uuid.UUID] = None
+    support_group_id: Optional[uuid.UUID] = None
+    status: Optional[TicketStatus] = None
+    priority: Optional[TicketPriority] = None
+
+
+class TicketBulkActionResponse(BaseModel):
+    updated: int
+    skipped: int
+    errors: list[str] = Field(default_factory=list)
 
 
 class AnalyticsSummaryOut(BaseModel):

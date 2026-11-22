@@ -1,0 +1,82 @@
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import desc, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.security import get_current_user
+from app.models.models import Notification, User
+from app.schemas.schemas import NotificationListResponse, NotificationOut
+
+router = APIRouter(prefix="/notifications", tags=["Notifications"])
+
+
+@router.get("", response_model=NotificationListResponse)
+async def list_notifications(
+    unread_only: bool = Query(default=False),
+    limit: int = Query(default=30, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    unread_count = (
+        await db.execute(
+            select(func.count(Notification.id)).where(
+                Notification.user_id == current_user.id,
+                Notification.is_read == False,
+            )
+        )
+    ).scalar_one()
+
+    stmt = select(Notification).where(Notification.user_id == current_user.id)
+    if unread_only:
+        stmt = stmt.where(Notification.is_read == False)
+    stmt = stmt.order_by(desc(Notification.created_at)).limit(limit)
+
+    items = list((await db.execute(stmt)).scalars().all())
+    return NotificationListResponse(
+        items=[NotificationOut.model_validate(item) for item in items],
+        unread_count=int(unread_count or 0),
+    )
+
+
+@router.post("/read-all")
+async def mark_all_notifications_read(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        update(Notification)
+        .where(Notification.user_id == current_user.id, Notification.is_read == False)
+        .values(is_read=True)
+    )
+    await db.commit()
+    return {"marked_read": int(res.rowcount or 0)}
+
+
+@router.post("/{notification_id}/read", response_model=NotificationOut)
+async def mark_notification_read(
+    notification_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        )
+    )
+    notif = res.scalar_one_or_none()
+    if notif is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy thông báo.",
+        )
+
+    if not notif.is_read:
+        notif.is_read = True
+        await db.commit()
+        await db.refresh(notif)
+
+    return NotificationOut.model_validate(notif)
+

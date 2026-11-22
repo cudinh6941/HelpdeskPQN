@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { ClipboardPaste, FileImage, Loader2, Paperclip, X } from "lucide-react";
+import { ClipboardPaste, FileText, Loader2, Paperclip, X } from "lucide-react";
 
 import { api, buildAttachmentUrl } from "@/lib/api";
 import { Attachment } from "@/lib/types";
@@ -110,7 +110,7 @@ export const PasteImageUploader = forwardRef<PasteUploaderHandle, Props>(
             ref={inputRef}
             type="file"
             multiple
-            accept="image/*,.pdf,.log,.txt,.xlsx,.docx"
+            accept="image/*,.pdf,.log,.txt,.csv,.json,.zip,.doc,.docx,.xls,.xlsx"
             className="hidden"
             onChange={(e) => {
               const files = Array.from(e.target.files || []);
@@ -143,7 +143,7 @@ export const PasteImageUploader = forwardRef<PasteUploaderHandle, Props>(
                     />
                   ) : (
                     <div className="size-10 rounded-xs bg-muted flex items-center justify-center text-muted-foreground">
-                      <FileImage className="size-4" strokeWidth={1.5} />
+                      <FileText className="size-4" strokeWidth={1.5} />
                     </div>
                   )}
                   <div className="max-w-[140px]">

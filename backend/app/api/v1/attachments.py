@@ -19,6 +19,83 @@ from app.services.ticket_state_machine import IT_ROLES
 
 router = APIRouter(prefix="/attachments", tags=["Attachments (MinIO + Ctrl+V Paste)"])
 
+INLINE_SAFE_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "application/pdf",
+}
+
+ALLOWED_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".pdf",
+    ".txt",
+    ".log",
+    ".csv",
+    ".json",
+    ".zip",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+}
+
+ALLOWED_MIME_TYPES = INLINE_SAFE_MIME_TYPES | {
+    "text/plain",
+    "text/csv",
+    "application/json",
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/msword",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+BLOCKED_MIME_TYPES = {
+    "image/svg+xml",
+    "text/html",
+    "application/xhtml+xml",
+    "application/javascript",
+    "text/javascript",
+}
+
+
+def _validate_attachment(file_name: str, content_type: str, size_bytes: int) -> str:
+    max_bytes = get_settings().ATTACHMENT_MAX_BYTES
+    if size_bytes > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Dung lượng tệp vượt quá giới hạn cho phép.",
+        )
+
+    mime = (content_type or "").split(";", 1)[0].strip().lower()
+    if mime in BLOCKED_MIME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Định dạng tệp này không được phép tải lên vì lý do bảo mật.",
+        )
+
+    ext = PurePath(file_name).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Phần mở rộng tệp không được hỗ trợ.",
+        )
+
+    if mime not in ALLOWED_MIME_TYPES and mime not in ("", "application/octet-stream"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Loại nội dung tệp (MIME type) không được hỗ trợ.",
+        )
+
+    return mime or "application/octet-stream"
+
 
 def serialize_attachment(att: TicketAttachment) -> AttachmentOut:
     return AttachmentOut(
@@ -43,6 +120,8 @@ async def create_presigned_upload(
 ):
     settings = get_settings()
     safe_name = PurePath(payload.file_name).name or "pasted-image.png"
+    normalized_mime = _validate_attachment(safe_name, payload.content_type, payload.size_bytes)
+
     att_id = uuid7()
     date_prefix = datetime.now(timezone.utc).strftime("%Y/%m/%d")
     object_key = f"{date_prefix}/{att_id}_{safe_name}"
@@ -70,7 +149,7 @@ async def create_presigned_upload(
         bucket_name=settings.MINIO_BUCKET,
         object_key=object_key,
         file_name=safe_name,
-        content_type=payload.content_type,
+        content_type=normalized_mime,
         size_bytes=payload.size_bytes,
         is_uploaded=False,
     )
@@ -107,7 +186,11 @@ async def upload_attachment_raw(
     if not data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nội dung file trống.")
 
-    storage_service.put_object_bytes(att.object_key, data, att.content_type)
+    req_mime = request.headers.get("Content-Type") or att.content_type
+    normalized_mime = _validate_attachment(att.file_name, req_mime, len(data))
+
+    storage_service.put_object_bytes(att.object_key, data, normalized_mime)
+    att.content_type = normalized_mime
     att.size_bytes = len(data)
     att.is_uploaded = True
     await db.commit()
@@ -134,9 +217,11 @@ async def upload_attachment_multipart(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nội dung file trống.")
 
     content_type = file.content_type or att.content_type
-    storage_service.put_object_bytes(att.object_key, data, content_type)
+    normalized_mime = _validate_attachment(att.file_name, content_type, len(data))
+
+    storage_service.put_object_bytes(att.object_key, data, normalized_mime)
     att.size_bytes = len(data)
-    att.content_type = content_type
+    att.content_type = normalized_mime
     att.is_uploaded = True
     await db.commit()
     await db.refresh(att)
@@ -159,6 +244,11 @@ async def _resolve_user_from_header_or_query(
     settings = get_settings()
     try:
         payload = jwt.decode(raw_token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        if payload.get("scope") not in (None, "media"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token không có quyền truy cập tệp đính kèm.",
+            )
         user_uuid = uuid.UUID(payload["sub"])
     except (JWTError, KeyError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token không hợp lệ.")
@@ -200,8 +290,15 @@ async def download_attachment_file(
     if data is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dữ liệu file không tồn tại trên Storage.")
 
+    safe_filename = att.file_name.replace('"', "").replace("\r", "").replace("\n", "")
+    norm_mime = (att.content_type or "").split(";", 1)[0].strip().lower()
+    disposition = "inline" if norm_mime in INLINE_SAFE_MIME_TYPES else "attachment"
+
     return Response(
         content=data,
         media_type=att.content_type,
-        headers={"Content-Disposition": f'inline; filename="{att.file_name}"'},
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
     )

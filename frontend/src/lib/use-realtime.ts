@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { API_BASE, getStoredToken } from "./api";
+import { api, API_BASE, getStoredToken } from "./api";
 
 export interface RealtimeEvent {
   type:
@@ -47,15 +47,25 @@ export function useRealtime(onEvent: (event: RealtimeEvent) => void): void {
       }
     };
 
-    const connect = () => {
+    const connect = async () => {
       if (!active) return;
-      const token = getStoredToken();
-      if (!token) return;
+      const storedToken = getStoredToken();
+      if (!storedToken) return;
 
+      let wsToken = storedToken;
       try {
-        ws = new WebSocket(buildWsUrl(token));
+        const scoped = await api.getScopedToken("ws");
+        if (!active) return;
+        wsToken = scoped.token;
       } catch {
-        reconnectTimer = window.setTimeout(connect, 2500);
+        // fallback to stored token if transient error occurs
+      }
+
+      if (!active) return;
+      try {
+        ws = new WebSocket(buildWsUrl(wsToken));
+      } catch {
+        reconnectTimer = window.setTimeout(() => void connect(), 2500);
         return;
       }
 
@@ -82,7 +92,7 @@ export function useRealtime(onEvent: (event: RealtimeEvent) => void): void {
       ws.onclose = () => {
         cleanupTimers();
         if (active) {
-          reconnectTimer = window.setTimeout(connect, 2000);
+          reconnectTimer = window.setTimeout(() => void connect(), 2000);
         }
       };
 
@@ -91,7 +101,7 @@ export function useRealtime(onEvent: (event: RealtimeEvent) => void): void {
       };
     };
 
-    connect();
+    void connect();
 
     return () => {
       active = false;

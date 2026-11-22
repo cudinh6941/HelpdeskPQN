@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     AUTO_ASSIGN_ENABLED: bool = True
     AUTO_CLOSE_RESOLVED_HOURS: int = 48
 
+    # Attachments & Security
+    ATTACHMENT_MAX_BYTES: int = 10 * 1024 * 1024
+    ORPHAN_ATTACHMENT_MAX_AGE_HOURS: int = 24
+    LOGIN_RATE_LIMIT_MAX_ATTEMPTS: int = 5
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300
+    LOGIN_RATE_LIMIT_LOCKOUT_SECONDS: int = 300
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost,http://127.0.0.1:3000"
 

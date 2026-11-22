@@ -127,5 +127,18 @@ class StorageService:
             return target.read_bytes()
         return None
 
+    def delete_object(self, object_key: str) -> None:
+        if self.minio_enabled:
+            try:
+                client = self._get_internal_client()
+                client.remove_object(self.settings.MINIO_BUCKET, object_key)
+            except Exception as exc:
+                logger.warning("MinIO remove_object failed for '%s': %s", object_key, exc)
+
+        local_root_resolved = self.local_root.resolve()
+        target = (self.local_root / object_key).resolve()
+        if local_root_resolved in target.parents and target.exists() and target.is_file():
+            target.unlink(missing_ok=True)
+
 
 storage_service = StorageService()

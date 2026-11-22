@@ -29,6 +29,9 @@ async def websocket_endpoint(
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
         )
+        if payload.get("scope") not in (None, "ws"):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
         user_uuid = uuid.UUID(payload["sub"])
     except (JWTError, KeyError, ValueError):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)

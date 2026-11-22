@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
 from app.models.models import (
     BusinessCalendar,
+    CannedResponse,
     Category,
     Department,
     KbArticle,
@@ -210,10 +211,72 @@ async def ensure_kb_articles_seeded(db: AsyncSession) -> None:
         await db.commit()
 
 
+DEFAULT_CANNED_RESPONSES: list[dict] = [
+    {
+        "shortcut": "uv",
+        "title": "Xin UltraViewer để kiểm tra trực tiếp",
+        "body": "Chào bạn, bạn vui lòng mở phần mềm UltraViewer trên máy và gửi lại giúp mình ID + Mật khẩu để mình kết nối kiểm tra xử lý trực tiếp nhé.",
+        "target_status": TicketStatus.WAITING_FOR_USER,
+        "is_internal": False,
+    },
+    {
+        "shortcut": "info",
+        "title": "Xin ảnh chụp lỗi & mã tài sản",
+        "body": "Bạn vui lòng chụp lại màn hình thông báo lỗi (có thể dán trực tiếp Ctrl+V vào khung trả lời) và cho mình xin mã tài sản/tem máy (VD: PC-KT-012) để kiểm tra nhanh hơn ạ.",
+        "target_status": TicketStatus.WAITING_FOR_USER,
+        "is_internal": False,
+    },
+    {
+        "shortcut": "restart",
+        "title": "Nhờ khởi động lại máy & kiểm tra lại",
+        "body": "Mình đã cập nhật lại cấu hình từ xa. Bạn vui lòng Restart lại máy tính rồi kiểm tra lại giúp mình xem lỗi còn xuất hiện không nhé.",
+        "target_status": TicketStatus.WAITING_FOR_USER,
+        "is_internal": False,
+    },
+    {
+        "shortcut": "done",
+        "title": "Xác nhận đã xử lý xong",
+        "body": "Sự cố đã được xử lý xong và kiểm tra hoạt động ổn định. Bạn kiểm tra lại giúp mình, nếu cần hỗ trợ thêm có thể mở lại ticket nhé.",
+        "target_status": TicketStatus.RESOLVED,
+        "is_internal": False,
+    },
+    {
+        "shortcut": "handoff",
+        "title": "Bàn giao nội bộ L2 / Hạ tầng",
+        "body": "Đã kiểm tra bước đầu ở L1 (ping/AD/quyền cơ bản bình thường). Chuyển nhóm chuyên trách kiểm tra sâu thêm phần switch/server.",
+        "target_status": None,
+        "is_internal": True,
+    },
+]
+
+
+async def ensure_canned_responses_seeded(db: AsyncSession) -> None:
+    existing = (await db.execute(select(func.count(CannedResponse.id)))).scalar_one()
+    if existing > 0:
+        return
+
+    now = datetime.now(timezone.utc)
+    for item in DEFAULT_CANNED_RESPONSES:
+        db.add(
+            CannedResponse(
+                shortcut=item["shortcut"],
+                title=item["title"],
+                body=item["body"],
+                target_status=item["target_status"],
+                is_internal=item["is_internal"],
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    await db.commit()
+
+
 async def seed_initial_data(db: AsyncSession) -> None:
     existing_users = (await db.execute(select(func.count(User.id)))).scalar_one()
     if existing_users > 0:
         await ensure_kb_articles_seeded(db)
+        await ensure_canned_responses_seeded(db)
         return
 
     logger.info("Seeding initial IT Helpdesk master data & sample tickets...")
@@ -572,4 +635,5 @@ async def seed_initial_data(db: AsyncSession) -> None:
 
     await db.commit()
     await ensure_kb_articles_seeded(db)
+    await ensure_canned_responses_seeded(db)
     logger.info("Initial seed data committed successfully.")

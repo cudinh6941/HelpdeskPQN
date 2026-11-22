@@ -1,0 +1,172 @@
+{
+  "name": "IT Helpdesk PQN — Outbox Notifications (HMAC Verified)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "it-helpdesk",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "webhook-in",
+      "name": "Webhook (IT Helpdesk Outbox)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.N8N_WEBHOOK_SECRET || 'helpdesk-n8n-secret';\nconst item = $input.first();\nconst sigHeader = String(item.json.headers?.['x-helpdesk-signature'] || '');\nconst rawBody = item.binary?.data\n  ? Buffer.from(item.binary.data.data, 'base64').toString('utf8')\n  : JSON.stringify(item.json.body || {});\n\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex');\nconst valid = sigHeader.length === expected.length && crypto.timingSafeEqual(Buffer.from(sigHeader), Buffer.from(expected));\n\nif (!valid) {\n  throw new Error('Invalid X-Helpdesk-Signature HMAC');\n}\n\nconst body = item.json.body || JSON.parse(rawBody);\nreturn [{ json: body }];"
+      },
+      "id": "verify-hmac",
+      "name": "Verify HMAC-SHA256 Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_internal === true }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "filter-public",
+      "name": "Filter Public Events",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.event_type }}",
+        "rules": {
+          "rules": [
+            {
+              "operation": "regex",
+              "value2": "^(TICKET_CREATED|SLA_WARNING|SLA_BREACHED|SLA_RESPONSE_BREACHED)$",
+              "output": 0
+            },
+            {
+              "operation": "regex",
+              "value2": "^(COMMENT_ADDED|STATUS_CHANGED|ULTRAVIEW_REQUESTED|TICKET_AUTO_CLOSED)$",
+              "output": 1
+            },
+            {
+              "operation": "equal",
+              "value2": "TICKET_RATED",
+              "output": 2
+            }
+          ]
+        },
+        "fallbackOutput": 3
+      },
+      "id": "route-event",
+      "name": "Route by Event Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [940, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_IT_GROUP_CHAT_ID, text: `[${$json.ticket.priority}] ${$json.ticket.ticket_code}: ${$json.ticket.title}\\n${$json.summary}${ $json.ticket.asset_code ? '\\nMã máy: ' + $json.ticket.asset_code : '' }` }) }}",
+        "options": {}
+      },
+      "id": "notify-it-telegram",
+      "name": "IT Telegram Group Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1220, 80]
+    },
+    {
+      "parameters": {
+        "fromEmail": "helpdesk@company.local",
+        "toEmail": "={{ $json.details?.requester_email || 'staff@company.local' }}",
+        "subject": "={{ '[Helpdesk ' + $json.ticket.ticket_code + '] ' + $json.ticket.title }}",
+        "text": "={{ $json.summary + '\\n\\nTrạng thái hiện tại: ' + $json.ticket.status + '\\nXem chi tiết tại cổng Helpdesk nội bộ.' }}",
+        "options": {}
+      },
+      "id": "notify-user-email",
+      "name": "Requester Email Update",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1220, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_IT_LEAD_CHAT_ID || $env.TELEGRAM_IT_GROUP_CHAT_ID, text: `CSAT ${$json.ticket.ticket_code}: ${$json.summary}` }) }}",
+        "options": {}
+      },
+      "id": "notify-csat",
+      "name": "IT Lead CSAT Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1220, 360]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\": true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-ok",
+      "name": "Respond 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1480, 300]
+    }
+  ],
+  "connections": {
+    "Webhook (IT Helpdesk Outbox)": {
+      "main": [[{ "node": "Verify HMAC-SHA256 Signature", "type": "main", "index": 0 }]]
+    },
+    "Verify HMAC-SHA256 Signature": {
+      "main": [[{ "node": "Filter Public Events", "type": "main", "index": 0 }]]
+    },
+    "Filter Public Events": {
+      "main": [
+        [{ "node": "Route by Event Type", "type": "main", "index": 0 }],
+        [{ "node": "Respond 200 OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Route by Event Type": {
+      "main": [
+        [{ "node": "IT Telegram Group Alert", "type": "main", "index": 0 }],
+        [{ "node": "Requester Email Update", "type": "main", "index": 0 }],
+        [{ "node": "IT Lead CSAT Alert", "type": "main", "index": 0 }],
+        [{ "node": "Respond 200 OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "IT Telegram Group Alert": {
+      "main": [[{ "node": "Respond 200 OK", "type": "main", "index": 0 }]]
+    },
+    "Requester Email Update": {
+      "main": [[{ "node": "Respond 200 OK", "type": "main", "index": 0 }]]
+    },
+    "IT Lead CSAT Alert": {
+      "main": [[{ "node": "Respond 200 OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+

@@ -8,15 +8,20 @@ import {
   BookOpen,
   Check,
   Copy,
+  GitMerge,
+  History,
+  Link2,
   Lock,
   Monitor,
   Paperclip,
   PanelRight,
   Send,
   X,
+  Zap,
 } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
+import { AttachmentList } from "@/components/AttachmentList";
 import { useNavigationProgress } from "@/components/NavigationProgress";
 import {
   PasteImageUploader,
@@ -32,10 +37,9 @@ import {
   SkeletonRow,
   SlaBadge,
   StatusBadge,
-  TopicBadge,
   selectBaseClass,
 } from "@/components/ui/primitives";
-import { api, buildAttachmentUrl } from "@/lib/api";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import {
   extractUltraViewFromText,
@@ -43,14 +47,17 @@ import {
   formatRelativeTime,
   formatUltraViewId,
   PRIORITY_LABELS,
+  STATUS_LABELS,
 } from "@/lib/formatters";
 import {
   Attachment,
+  CannedResponse,
   KbArticleDetail,
   Ticket,
   TicketDetail,
   TicketMetadata,
   TicketPriority,
+  TicketRelated,
   TicketStatus,
 } from "@/lib/types";
 import { useRealtime } from "@/lib/use-realtime";
@@ -65,7 +72,10 @@ export default function WorkspaceTicketDetailPage() {
 
   const [queueTickets, setQueueTickets] = useState<Ticket[]>([]);
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
+  const [related, setRelated] = useState<TicketRelated | null>(null);
   const [meta, setMeta] = useState<TicketMetadata | null>(null);
+  const [assetDraft, setAssetDraft] = useState("");
+  const [linkTargetId, setLinkTargetId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,13 +89,18 @@ export default function WorkspaceTicketDetailPage() {
   const [sending, setSending] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
 
-  // Mobile properties sheet (§13) & Knowledge Base helpers
+  // Mobile properties sheet (§13), Knowledge Base & Macros helpers
   const [mobilePropsOpen, setMobilePropsOpen] = useState(false);
   const [saveKbOpen, setSaveKbOpen] = useState(false);
   const [kbInsertOpen, setKbInsertOpen] = useState(false);
   const [kbInsertQuery, setKbInsertQuery] = useState("");
   const [kbArticles, setKbArticles] = useState<KbArticleDetail[]>([]);
   const [kbLoaded, setKbLoaded] = useState(false);
+  const [macroPickerOpen, setMacroPickerOpen] = useState(false);
+  const [macroQuery, setMacroQuery] = useState("");
+  const [macros, setMacros] = useState<CannedResponse[]>([]);
+  const [macrosLoaded, setMacrosLoaded] = useState(false);
+  const [pendingMacroStatus, setPendingMacroStatus] = useState<TicketStatus | null>(null);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -95,14 +110,17 @@ export default function WorkspaceTicketDetailPage() {
   const loadData = useCallback(async () => {
     setError(null);
     try {
-      const [detail, metadata, list] = await Promise.all([
+      const [detail, metadata, list, rel] = await Promise.all([
         api.getTicket(ticketId),
         api.getMetadata(),
         api.listTickets({ limit: 80 }),
+        api.getTicketRelated(ticketId).catch(() => null),
       ]);
       setTicket(detail);
+      setAssetDraft(detail.asset_code || "");
       setMeta(metadata);
       setQueueTickets(list.items);
+      setRelated(rel);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load ticket");
     } finally {
@@ -221,12 +239,102 @@ export default function WorkspaceTicketDetailPage() {
     }
   };
 
+  const handleCategoryUpdate = async (nextCategoryId: string) => {
+    if (!ticket) return;
+    setActionBusy(true);
+    try {
+      await api.updateTicket(ticketId, { category_id: nextCategoryId || null });
+      await loadData();
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleAssetSave = async () => {
+    if (!ticket) return;
+    const clean = assetDraft.trim().toUpperCase();
+    if ((ticket.asset_code || "") === clean) return;
+    setActionBusy(true);
+    try {
+      await api.updateTicket(ticketId, { asset_code: clean || null });
+      await loadData();
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleLinkParent = async (parentId: string | null) => {
+    setActionBusy(true);
+    setError(null);
+    try {
+      await api.linkParentTicket(ticketId, parentId);
+      setLinkTargetId("");
+      await loadData();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not link parent ticket.");
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleMergeTicket = async () => {
+    if (!linkTargetId) return;
+    setActionBusy(true);
+    setError(null);
+    try {
+      await api.mergeTicket(ticketId, linkTargetId);
+      setLinkTargetId("");
+      await loadData();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not merge ticket.");
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const currentDraft = composerTab === "reply" ? replyDraft : noteDraft;
   const setCurrentDraft = composerTab === "reply" ? setReplyDraft : setNoteDraft;
+
+  const loadMacrosIfNeeded = async () => {
+    if (macrosLoaded) return;
+    try {
+      const list = await api.listMacros();
+      setMacros(list);
+      setMacrosLoaded(true);
+    } catch {
+      // ignore transient error
+    }
+  };
+
+  const handleToggleMacroPicker = async () => {
+    const next = !macroPickerOpen;
+    setMacroPickerOpen(next);
+    if (next) {
+      setKbInsertOpen(false);
+      await loadMacrosIfNeeded();
+    }
+  };
+
+  const handleApplyMacro = (macro: CannedResponse) => {
+    const targetIsInternal = macro.is_internal;
+    setComposerTab(targetIsInternal ? "note" : "reply");
+    const setter = targetIsInternal ? setNoteDraft : setReplyDraft;
+    const existing = targetIsInternal ? noteDraft : replyDraft;
+    if (existing.trim().startsWith("/") || !existing.trim()) {
+      setter(macro.body);
+    } else {
+      setter(`${existing.trimEnd()}\n\n${macro.body}`);
+    }
+    setPendingMacroStatus(macro.target_status || null);
+    setMacroPickerOpen(false);
+    setMacroQuery("");
+    window.setTimeout(() => composerRef.current?.focus(), 30);
+  };
 
   const handleToggleKbInsert = async () => {
     const next = !kbInsertOpen;
     setKbInsertOpen(next);
+    if (next) setMacroPickerOpen(false);
     if (next && !kbLoaded) {
       try {
         const res = await api.listKbArticles();
@@ -290,6 +398,14 @@ export default function WorkspaceTicketDetailPage() {
         setReplyDraft("");
         setReplyAttachments([]);
       }
+      if (pendingMacroStatus && ticket && ticket.status !== pendingMacroStatus) {
+        try {
+          await api.updateTicketStatus(ticketId, pendingMacroStatus);
+        } catch {
+          // ignore if target status transition is not valid from current state
+        }
+      }
+      setPendingMacroStatus(null);
       setShowUploader(false);
       await loadData();
     } finally {
@@ -358,26 +474,42 @@ export default function WorkspaceTicketDetailPage() {
 
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
           <span className="text-meta">Category</span>
-          <div>
-            {ticket.category ? (
-              <TopicBadge
-                label={ticket.category.name}
-                iconSlug={ticket.category.slug}
-              />
-            ) : (
-              <span className="text-body text-faint">—</span>
+          <select
+            disabled={actionBusy}
+            value={ticket.category_id || ""}
+            onChange={(e) => void handleCategoryUpdate(e.target.value)}
+            aria-label="Ticket category"
+            className={cn(
+              selectBaseClass,
+              "h-7 border-transparent bg-transparent hover:border-border hover:bg-card px-1.5 -ml-1.5"
             )}
-          </div>
+          >
+            <option value="">—</option>
+            {meta?.categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 min-h-[32px]">
           <span className="text-meta">Asset Code</span>
-          <div>
-            {ticket.asset_code ? (
-              <TopicBadge label={ticket.asset_code} iconSlug="asset" mono />
-            ) : (
-              <span className="text-body text-faint">—</span>
-            )}
+          <div className="flex items-center gap-1 min-w-0">
+            <input
+              type="text"
+              value={assetDraft}
+              onChange={(e) => setAssetDraft(e.target.value)}
+              onBlur={() => void handleAssetSave()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void handleAssetSave();
+                }
+              }}
+              placeholder="PC-..."
+              className="w-full h-7 px-1.5 -ml-1.5 rounded-sm border border-transparent hover:border-border focus:border-input focus:bg-card bg-transparent text-[13px] font-mono uppercase text-foreground placeholder:text-faint focus:outline-none"
+            />
           </div>
         </div>
 
@@ -441,14 +573,27 @@ export default function WorkspaceTicketDetailPage() {
           <span className="inline-flex items-center gap-1.5 text-meta">
             <Monitor className="size-3.5 text-faint" strokeWidth={1.5} />
             <span>UltraViewer</span>
+            <span className="text-meta-faint">
+              ·{" "}
+              {ticket.custom_data?.ultraview?.state === "READY"
+                ? "Ready"
+                : ticket.custom_data?.ultraview?.state === "REQUESTED"
+                ? "Requested"
+                : "None"}
+            </span>
           </span>
-          <span className="text-meta-faint">
-            {ticket.custom_data?.ultraview?.state === "READY"
-              ? "Ready"
-              : ticket.custom_data?.ultraview?.state === "REQUESTED"
-              ? "Requested"
-              : "—"}
-          </span>
+          {ticket.status !== "CLOSED" &&
+            ticket.status !== "CANCELLED" &&
+            ticket.status !== "RESOLVED" && (
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => void handleRequestUltraView()}
+                className="inline-flex h-6 items-center gap-1 rounded-sm border border-border bg-card px-2 text-[12px] font-medium text-foreground hover:bg-muted disabled:opacity-50"
+              >
+                Request
+              </button>
+            )}
         </div>
 
         {ticket.custom_data?.ultraview?.id ? (
@@ -540,6 +685,173 @@ export default function WorkspaceTicketDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Incident Link / Merge */}
+      <div className="border-t border-border pt-4 space-y-2.5">
+        <div className="flex items-center gap-1.5 text-meta">
+          <Link2 className="size-3.5 text-faint" strokeWidth={1.5} />
+          <span>Parent / Merge</span>
+        </div>
+
+        {related?.parent && (
+          <div className="rounded-sm border border-border bg-card px-2.5 py-2 flex items-center justify-between gap-2">
+            <Link
+              href={`/workspace/tickets/${related.parent.id}`}
+              className="min-w-0 flex-1 text-[12px] hover:underline truncate"
+            >
+              <span className="font-mono text-muted-foreground mr-1">
+                {related.parent.ticket_code}
+              </span>
+              <span className="text-foreground">{related.parent.title}</span>
+            </Link>
+            <button
+              type="button"
+              disabled={actionBusy}
+              onClick={() => void handleLinkParent(null)}
+              className="text-[11px] text-muted-foreground hover:text-destructive shrink-0"
+            >
+              Unlink
+            </button>
+          </div>
+        )}
+
+        {related && related.children.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[11px] text-meta">
+              Linked child tickets ({related.children.length}) — resolving parent resolves open children
+            </p>
+            <div className="space-y-1">
+              {related.children.map((ch) => (
+                <Link
+                  key={ch.id}
+                  href={`/workspace/tickets/${ch.id}`}
+                  className="block rounded-sm border border-border-subtle bg-card px-2 py-1.5 text-[12px] hover:bg-muted/60 truncate"
+                >
+                  <span className="font-mono text-muted-foreground mr-1.5">
+                    {ch.ticket_code}
+                  </span>
+                  <span className="text-foreground">{ch.title}</span>
+                  <span className="ml-1.5 text-[11px] text-faint">
+                    ({STATUS_LABELS[ch.status]})
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!related?.parent &&
+          ticket.status !== "CLOSED" &&
+          ticket.status !== "CANCELLED" && (
+            <div className="space-y-1.5">
+              <select
+                value={linkTargetId}
+                onChange={(e) => setLinkTargetId(e.target.value)}
+                className={cn(selectBaseClass, "w-full h-7 text-[12px]")}
+              >
+                <option value="">Select target incident...</option>
+                {queueTickets
+                  .filter(
+                    (q) =>
+                      q.id !== ticket.id &&
+                      q.status !== "CLOSED" &&
+                      q.status !== "CANCELLED"
+                  )
+                  .map((q) => (
+                    <option key={q.id} value={q.id}>
+                      {q.ticket_code} — {q.title}
+                    </option>
+                  ))}
+              </select>
+              {linkTargetId && (
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={actionBusy}
+                    onClick={() => void handleLinkParent(linkTargetId)}
+                    className="flex-1"
+                  >
+                    <Link2 className="size-3" />
+                    <span>Link parent</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={actionBusy}
+                    onClick={() => void handleMergeTicket()}
+                    className="flex-1"
+                  >
+                    <GitMerge className="size-3" />
+                    <span>Merge</span>
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+      </div>
+
+      {/* Asset & Requester History */}
+      {related && (related.by_asset.length > 0 || related.by_requester.length > 0) && (
+        <div className="border-t border-border pt-4 space-y-3">
+          {related.by_asset.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-meta">
+                  <History className="size-3.5 text-faint" strokeWidth={1.5} />
+                  <span>Asset {ticket.asset_code}</span>
+                </span>
+                <span
+                  className={cn(
+                    "text-[11px] font-medium px-1.5 py-0.5 rounded-xs tabular-nums",
+                    related.by_asset.length >= 3
+                      ? "bg-sla-breached text-sla-breached-fg"
+                      : "bg-muted text-muted-foreground"
+                  )}
+                >
+                  {related.by_asset.length} prior
+                </span>
+              </div>
+              <div className="space-y-1">
+                {related.by_asset.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={`/workspace/tickets/${item.id}`}
+                    className="block rounded-sm border border-border-subtle bg-card px-2 py-1.5 text-[12px] hover:bg-muted/60 truncate"
+                  >
+                    <span className="font-mono text-muted-foreground mr-1.5">
+                      {item.ticket_code}
+                    </span>
+                    <span className="text-foreground">{item.title}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {related.by_requester.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-meta">Recent from requester ({related.by_requester.length})</p>
+              <div className="space-y-1">
+                {related.by_requester.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={`/workspace/tickets/${item.id}`}
+                    className="block rounded-sm border border-border-subtle bg-card px-2 py-1.5 text-[12px] hover:bg-muted/60 truncate"
+                  >
+                    <span className="font-mono text-muted-foreground mr-1.5">
+                      {item.ticket_code}
+                    </span>
+                    <span className="text-foreground">{item.title}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Timeline */}
       <div className="border-t border-border pt-4 space-y-3">
@@ -717,31 +1029,7 @@ export default function WorkspaceTicketDetailPage() {
                   <p className="pl-8 mt-1 text-body whitespace-pre-wrap">
                     {ticket.description}
                   </p>
-                  {ticket.attachments.length > 0 && (
-                    <div className="pl-8 mt-2 flex flex-wrap gap-2">
-                      {ticket.attachments.map((att) => (
-                        <a
-                          key={att.id}
-                          href={buildAttachmentUrl(att.download_url)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-sm border border-border overflow-hidden hover:border-foreground/40"
-                        >
-                          {att.content_type.startsWith("image/") ? (
-                            <img
-                              src={buildAttachmentUrl(att.download_url)}
-                              alt={att.file_name}
-                              className="h-24 w-auto object-cover"
-                            />
-                          ) : (
-                            <span className="px-2.5 py-1.5 text-[13px] text-foreground inline-block">
-                              {att.file_name}
-                            </span>
-                          )}
-                        </a>
-                      ))}
-                    </div>
-                  )}
+                  <AttachmentList attachments={ticket.attachments} />
                 </div>
 
                 {/* Replies & Internal Notes (§9.3) */}
@@ -804,24 +1092,7 @@ export default function WorkspaceTicketDetailPage() {
                           </div>
                         );
                       })()}
-                        {c.attachments.length > 0 && (
-                          <div className="pl-8 mt-2 flex flex-wrap gap-2">
-                            {c.attachments.map((att) => (
-                              <a
-                                key={att.id}
-                                href={buildAttachmentUrl(att.download_url)}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                <img
-                                  src={buildAttachmentUrl(att.download_url)}
-                                  alt={att.file_name}
-                                  className="h-24 rounded-sm border border-note-border"
-                                />
-                              </a>
-                            ))}
-                          </div>
-                        )}
+                        <AttachmentList attachments={c.attachments} noteStyle />
                       </div>
                     );
                   }
@@ -876,24 +1147,7 @@ export default function WorkspaceTicketDetailPage() {
                           </div>
                         );
                       })()}
-                      {c.attachments.length > 0 && (
-                        <div className="pl-8 mt-2 flex flex-wrap gap-2">
-                          {c.attachments.map((att) => (
-                            <a
-                              key={att.id}
-                              href={buildAttachmentUrl(att.download_url)}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              <img
-                                src={buildAttachmentUrl(att.download_url)}
-                                alt={att.file_name}
-                                className="h-24 rounded-sm border border-border"
-                              />
-                            </a>
-                          ))}
-                        </div>
-                      )}
+                      <AttachmentList attachments={c.attachments} />
                     </div>
                   );
                 })}
@@ -968,7 +1222,18 @@ export default function WorkspaceTicketDetailPage() {
                   ref={composerRef}
                   rows={3}
                   value={currentDraft}
-                  onChange={(e) => setCurrentDraft(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCurrentDraft(val);
+                    if (val.startsWith("/")) {
+                      setMacroQuery(val.slice(1));
+                      if (!macroPickerOpen) {
+                        setMacroPickerOpen(true);
+                        setKbInsertOpen(false);
+                        void loadMacrosIfNeeded();
+                      }
+                    }
+                  }}
                   onPaste={handleComposerPaste}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -978,11 +1243,26 @@ export default function WorkspaceTicketDetailPage() {
                   }}
                   placeholder={
                     composerTab === "reply"
-                      ? `Write a reply to ${ticket.requester.full_name}… (Ctrl+V to paste screenshot)`
+                      ? `Write a reply to ${ticket.requester.full_name}… (type / for macros, Ctrl+V for images)`
                       : "Add an internal note. Only your team can see this."
                   }
                   className="w-full resize-none bg-transparent text-body placeholder:text-faint focus:outline-none"
                 />
+
+                {pendingMacroStatus && (
+                  <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-sm border border-border bg-background px-2 py-0.5 text-[12px] text-foreground">
+                    <Zap className="size-3 text-muted-foreground" />
+                    <span>Will also set status → {STATUS_LABELS[pendingMacroStatus]}</span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingMacroStatus(null)}
+                      className="text-faint hover:text-foreground"
+                      aria-label="Clear macro status"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                )}
 
                 {(showUploader || currentAttachments.length > 0) && (
                   <div className="mt-2">
@@ -1016,7 +1296,74 @@ export default function WorkspaceTicketDetailPage() {
                       <BookOpen className="size-3.5" strokeWidth={1.5} />
                       <span>Insert KB</span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleMacroPicker()}
+                      className="inline-flex items-center gap-1 text-[13px] hover:text-foreground transition-colors duration-75"
+                      title="Insert canned response macro (/)"
+                    >
+                      <Zap className="size-3.5" strokeWidth={1.5} />
+                      <span>Macros (/)</span>
+                    </button>
                   </div>
+
+                  {macroPickerOpen && (
+                    <div className="anim-popover absolute left-0 bottom-11 z-30 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover shadow-popover overflow-hidden">
+                      <div className="p-2 border-b border-border flex items-center gap-2">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={macroQuery}
+                          onChange={(e) => setMacroQuery(e.target.value)}
+                          placeholder="Search /shortcut or title..."
+                          className="w-full h-7 px-2.5 rounded-sm border border-input bg-card text-[13px] text-foreground placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ring/20"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setMacroPickerOpen(false)}
+                          className="text-faint hover:text-foreground shrink-0"
+                          aria-label="Close macro picker"
+                        >
+                          <X className="size-3.5" strokeWidth={1.5} />
+                        </button>
+                      </div>
+                      <div className="max-h-56 overflow-y-auto divide-y divide-border-subtle">
+                        {macros
+                          .filter((m) => {
+                            const q = macroQuery.trim().toLowerCase().replace(/^\//, "");
+                            if (!q) return true;
+                            return (
+                              m.shortcut.toLowerCase().includes(q) ||
+                              m.title.toLowerCase().includes(q) ||
+                              m.body.toLowerCase().includes(q)
+                            );
+                          })
+                          .map((m) => (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() => handleApplyMacro(m)}
+                              className="w-full text-left px-3 py-2 hover:bg-muted/60 transition-colors duration-75"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[13px] font-medium text-foreground truncate">
+                                  {m.title}
+                                </span>
+                                <span className="text-[11px] font-mono px-1.5 py-0.5 rounded-xs bg-muted text-muted-foreground shrink-0">
+                                  /{m.shortcut}
+                                </span>
+                              </div>
+                              <p className="text-[12px] text-muted-foreground truncate mt-0.5">
+                                {m.is_internal ? "Internal note · " : ""}
+                                {m.target_status ? `→ ${m.target_status} · ` : ""}
+                                {m.body}
+                              </p>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
 
                   {kbInsertOpen && (
                     <div className="anim-popover absolute left-0 bottom-11 z-30 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover shadow-popover overflow-hidden">

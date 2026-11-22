@@ -58,6 +58,49 @@ export interface SupportGroup {
   is_active: boolean;
 }
 
+export interface SupportGroupMember {
+  id: string;
+  user_id: string;
+  is_lead: boolean;
+  user: UserBrief;
+}
+
+export interface SupportGroupDetail extends SupportGroup {
+  members: SupportGroupMember[];
+}
+
+export interface BusinessCalendar {
+  id: string;
+  name: string;
+  timezone: string;
+  work_days: Record<string, [string, string]>;
+  holidays: string[];
+  is_default: boolean;
+}
+
+export interface NotificationItem {
+  id: string;
+  user_id: string;
+  ticket_id?: string | null;
+  event_type: string;
+  title: string;
+  body: string;
+  link_url: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  items: NotificationItem[];
+  unread_count: number;
+}
+
+export interface TicketBulkActionResponse {
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface SlaPolicy {
   id: string;
   name: string;
@@ -183,6 +226,7 @@ export interface Ticket {
   support_group?: SupportGroup | null;
   category_id?: string | null;
   category?: Category | null;
+  parent_ticket_id?: string | null;
   asset_code?: string | null;
   custom_data: Record<string, any>;
   first_response_due_at?: string | null;
@@ -213,6 +257,37 @@ export interface TicketMetadata {
   support_groups: SupportGroup[];
   sla_policies: SlaPolicy[];
   it_agents: UserBrief[];
+  requesters?: UserBrief[];
+}
+
+export interface TicketBrief {
+  id: string;
+  ticket_code: string;
+  title: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  asset_code?: string | null;
+  created_at: string;
+}
+
+export interface TicketRelated {
+  by_asset: TicketBrief[];
+  by_requester: TicketBrief[];
+  parent?: TicketBrief | null;
+  children: TicketBrief[];
+}
+
+export interface CannedResponse {
+  id: string;
+  shortcut: string;
+  title: string;
+  body: string;
+  category_id?: string | null;
+  target_status?: TicketStatus | null;
+  is_internal: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface OutboxEvent {

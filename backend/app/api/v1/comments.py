@@ -19,6 +19,7 @@ from app.models.models import (
     UserRole,
 )
 from app.schemas.schemas import CommentCreate, CommentOut
+from app.services.notification_service import create_ticket_notifications
 from app.services.outbox_writer import emit_outbox_event
 from app.services.sla_engine import resume_ticket_sla
 from app.services.ticket_state_machine import IT_ROLES, stamp_first_response_if_needed
@@ -108,6 +109,23 @@ async def add_ticket_comment(
             "body_preview": comment.body[:160],
             "resumed_sla_seconds": resumed_seconds,
         },
+        is_internal=payload.is_internal,
+    )
+    await create_ticket_notifications(
+        db=db,
+        ticket=ticket,
+        event_type="INTERNAL_NOTE_ADDED" if payload.is_internal else "COMMENT_ADDED",
+        title=(
+            f"Ghi chú nội bộ: {ticket.ticket_code}"
+            if payload.is_internal
+            else f"Phản hồi mới: {ticket.ticket_code}"
+        ),
+        body=(
+            f"{current_user.full_name} ghi chú nội bộ: {comment.body[:120]}"
+            if payload.is_internal
+            else f"{current_user.full_name}: {comment.body[:120]}"
+        ),
+        actor_id=current_user.id,
         is_internal=payload.is_internal,
     )
 

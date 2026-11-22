@@ -2,17 +2,24 @@ import {
   AnalyticsSummary,
   Attachment,
   AutomationSettings,
+  BusinessCalendar,
+  CannedResponse,
   Category,
   DemoAccount,
+  Department,
   KbArticleDetail,
   KbVisibility,
+  NotificationItem,
+  NotificationListResponse,
   OutboxEvent,
   SlaPolicy,
-  SupportGroup,
+  SupportGroupDetail,
+  TicketBulkActionResponse,
   TicketComment,
   TicketDetail,
   TicketMetadata,
   TicketPriority,
+  TicketRelated,
   TicketStatus,
   Ticket,
   User,
@@ -24,6 +31,7 @@ export const API_BASE =
   ENV_API !== undefined ? ENV_API.replace(/\/$/, "") : "http://localhost:8000";
 
 const TOKEN_STORAGE_KEY = "helpdesk_jwt_token";
+let mediaScopedToken: string | null = null;
 
 export function getStoredToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -39,8 +47,16 @@ export function setStoredToken(token: string | null): void {
   }
 }
 
+export function getMediaToken(): string | null {
+  return mediaScopedToken;
+}
+
+export function setMediaToken(token: string | null): void {
+  mediaScopedToken = token;
+}
+
 export function buildAttachmentUrl(downloadPath: string): string {
-  const token = getStoredToken();
+  const token = getMediaToken() || getStoredToken();
   const base = downloadPath.startsWith("http") ? downloadPath : `${API_BASE}${downloadPath}`;
   if (!token) return base;
   const sep = base.includes("?") ? "&" : "?";
@@ -85,32 +101,112 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+  getScopedToken: (scope: "ws" | "media") =>
+    apiFetch<{ token: string; scope: string; expires_in: number }>("/api/v1/auth/scoped-token", {
+      method: "POST",
+      body: JSON.stringify({ scope }),
+    }),
   getMe: () => apiFetch<User>("/api/v1/auth/me"),
+  updateMyProfile: (payload: { telegram_chat_id?: string | null; zalo_user_id?: string | null }) =>
+    apiFetch<User>("/api/v1/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   getDemoAccounts: () => apiFetch<DemoAccount[]>("/api/v1/auth/demo-accounts"),
+
+  // Notifications
+  listNotifications: (params?: { unread_only?: boolean; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.unread_only) qs.set("unread_only", "true");
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const query = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<NotificationListResponse>(`/api/v1/notifications${query}`);
+  },
+  markNotificationRead: (notificationId: string) =>
+    apiFetch<NotificationItem>(`/api/v1/notifications/${notificationId}/read`, {
+      method: "POST",
+    }),
+  markAllNotificationsRead: () =>
+    apiFetch<{ marked_read: number }>("/api/v1/notifications/read-all", {
+      method: "POST",
+    }),
 
   // Metadata & Tickets
   getMetadata: () => apiFetch<TicketMetadata>("/api/v1/tickets/metadata"),
   listTickets: (params?: {
     status?: TicketStatus | "";
     priority?: TicketPriority | "";
+    category_id?: string;
+    support_group_id?: string;
+    assignee_id?: string;
+    asset_code?: string;
     mine?: boolean;
+    requested_by_me?: boolean;
     unassigned_only?: boolean;
     sla_breached?: boolean;
+    date_from?: string;
+    date_to?: string;
     q?: string;
     limit?: number;
+    offset?: number;
   }) => {
     const qs = new URLSearchParams();
     if (params?.status) qs.set("status", params.status);
     if (params?.priority) qs.set("priority", params.priority);
+    if (params?.category_id) qs.set("category_id", params.category_id);
+    if (params?.support_group_id) qs.set("support_group_id", params.support_group_id);
+    if (params?.assignee_id) qs.set("assignee_id", params.assignee_id);
+    if (params?.asset_code) qs.set("asset_code", params.asset_code);
     if (params?.mine) qs.set("mine", "true");
+    if (params?.requested_by_me) qs.set("requested_by_me", "true");
     if (params?.unassigned_only) qs.set("unassigned_only", "true");
     if (params?.sla_breached !== undefined) qs.set("sla_breached", String(params.sla_breached));
+    if (params?.date_from) qs.set("date_from", params.date_from);
+    if (params?.date_to) qs.set("date_to", params.date_to);
     if (params?.q) qs.set("q", params.q);
     if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
     const query = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<{ items: Ticket[]; total: number }>(`/api/v1/tickets${query}`);
   },
+  bulkTicketAction: (payload: {
+    ticket_ids: string[];
+    action: "claim" | "assign" | "status" | "priority";
+    assignee_id?: string | null;
+    support_group_id?: string | null;
+    status?: TicketStatus;
+    priority?: TicketPriority;
+  }) =>
+    apiFetch<TicketBulkActionResponse>("/api/v1/tickets/bulk", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getTicket: (ticketId: string) => apiFetch<TicketDetail>(`/api/v1/tickets/${ticketId}`),
+  updateTicket: (
+    ticketId: string,
+    payload: {
+      title?: string;
+      category_id?: string | null;
+      asset_code?: string | null;
+      support_group_id?: string | null;
+    }
+  ) =>
+    apiFetch<TicketDetail>(`/api/v1/tickets/${ticketId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  getTicketRelated: (ticketId: string) =>
+    apiFetch<TicketRelated>(`/api/v1/tickets/${ticketId}/related`),
+  linkParentTicket: (ticketId: string, parent_ticket_id: string | null) =>
+    apiFetch<TicketDetail>(`/api/v1/tickets/${ticketId}/link-parent`, {
+      method: "POST",
+      body: JSON.stringify({ parent_ticket_id }),
+    }),
+  mergeTicket: (ticketId: string, target_ticket_id: string, note?: string) =>
+    apiFetch<TicketDetail>(`/api/v1/tickets/${ticketId}/merge`, {
+      method: "POST",
+      body: JSON.stringify({ target_ticket_id, note }),
+    }),
   createTicket: (payload: {
     title: string;
     description: string;
@@ -119,6 +215,8 @@ export const api = {
     asset_code?: string;
     ultraview_id?: string;
     ultraview_pass?: string;
+    requester_id?: string | null;
+    assign_to_me?: boolean;
     attachment_ids?: string[];
   }) =>
     apiFetch<TicketDetail>("/api/v1/tickets", {
@@ -270,17 +368,116 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  adminListGroups: () => apiFetch<SupportGroup[]>("/api/v1/admin/support-groups"),
+  adminUpdateCategory: (
+    categoryId: string,
+    payload: {
+      name?: string;
+      description?: string | null;
+      default_group_id?: string | null;
+      default_priority?: TicketPriority;
+      is_active?: boolean;
+      sort_order?: number;
+    }
+  ) =>
+    apiFetch<Category>(`/api/v1/admin/categories/${categoryId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  adminListGroups: () => apiFetch<SupportGroupDetail[]>("/api/v1/admin/support-groups"),
+  adminCreateGroup: (payload: { code: string; name: string; description?: string }) =>
+    apiFetch<SupportGroupDetail>("/api/v1/admin/support-groups", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  adminUpdateGroup: (
+    groupId: string,
+    payload: { name?: string; description?: string | null; is_active?: boolean }
+  ) =>
+    apiFetch<SupportGroupDetail>(`/api/v1/admin/support-groups/${groupId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  adminAddGroupMember: (groupId: string, payload: { user_id: string; is_lead?: boolean }) =>
+    apiFetch<SupportGroupDetail>(`/api/v1/admin/support-groups/${groupId}/members`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  adminRemoveGroupMember: (groupId: string, userId: string) =>
+    apiFetch<SupportGroupDetail>(`/api/v1/admin/support-groups/${groupId}/members/${userId}`, {
+      method: "DELETE",
+    }),
   adminListSlaPolicies: () => apiFetch<SlaPolicy[]>("/api/v1/admin/sla-policies"),
   adminUpdateSlaPolicy: (
     policyId: string,
-    payload: { first_response_minutes?: number; resolution_minutes?: number }
+    payload: {
+      name?: string;
+      first_response_minutes?: number;
+      resolution_minutes?: number;
+      warning_threshold_pct?: number;
+      business_hours_only?: boolean;
+      is_active?: boolean;
+    }
   ) =>
     apiFetch<SlaPolicy>(`/api/v1/admin/sla-policies/${policyId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  adminGetBusinessCalendar: () =>
+    apiFetch<BusinessCalendar>("/api/v1/admin/business-calendar"),
+  adminUpdateBusinessCalendar: (payload: {
+    name?: string;
+    timezone?: string;
+    work_days?: Record<string, [string, string]>;
+    holidays?: string[];
+  }) =>
+    apiFetch<BusinessCalendar>("/api/v1/admin/business-calendar", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  adminListDepartments: () => apiFetch<Department[]>("/api/v1/admin/departments"),
+  adminCreateDepartment: (payload: { code: string; name: string; description?: string }) =>
+    apiFetch<Department>("/api/v1/admin/departments", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  adminUpdateDepartment: (
+    deptId: string,
+    payload: { name?: string; description?: string | null; is_active?: boolean }
+  ) =>
+    apiFetch<Department>(`/api/v1/admin/departments/${deptId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   adminListUsers: () => apiFetch<User[]>("/api/v1/admin/users"),
+  adminCreateUser: (payload: {
+    username: string;
+    email: string;
+    full_name: string;
+    password: string;
+    role: UserRole;
+    department_id?: string | null;
+    telegram_chat_id?: string | null;
+    zalo_user_id?: string | null;
+  }) =>
+    apiFetch<User>("/api/v1/admin/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  adminUpdateUser: (
+    userId: string,
+    payload: {
+      role?: UserRole;
+      full_name?: string;
+      department_id?: string | null;
+      is_active?: boolean;
+      telegram_chat_id?: string | null;
+      zalo_user_id?: string | null;
+    }
+  ) =>
+    apiFetch<User>(`/api/v1/admin/users/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   adminUpdateUserRole: (userId: string, role: UserRole) =>
     apiFetch<User>(`/api/v1/admin/users/${userId}`, {
       method: "PATCH",
@@ -366,4 +563,43 @@ export const api = {
       `/api/v1/admin/automation/run-auto-close${hours ? `?hours=${hours}` : ""}`,
       { method: "POST" }
     ),
+
+  // Canned Responses / Macros
+  listMacros: (params?: { q?: string; category_id?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.category_id) qs.set("category_id", params.category_id);
+    const query = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<CannedResponse[]>(`/api/v1/macros${query}`);
+  },
+  createMacro: (payload: {
+    shortcut: string;
+    title: string;
+    body: string;
+    category_id?: string | null;
+    target_status?: TicketStatus | null;
+    is_internal?: boolean;
+  }) =>
+    apiFetch<CannedResponse>("/api/v1/macros", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateMacro: (
+    macroId: string,
+    payload: {
+      shortcut?: string;
+      title?: string;
+      body?: string;
+      category_id?: string | null;
+      target_status?: TicketStatus | null;
+      is_internal?: boolean;
+      is_active?: boolean;
+    }
+  ) =>
+    apiFetch<CannedResponse>(`/api/v1/macros/${macroId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteMacro: (macroId: string) =>
+    apiFetch<void>(`/api/v1/macros/${macroId}`, { method: "DELETE" }),
 };

@@ -235,6 +235,20 @@ def create_access_token(user: User) -> str:
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
+def create_scoped_token(user: User, scope: str, expires_seconds: int = 300) -> str:
+    """Create a short-lived JWT restricted to a specific channel ('ws' or 'media')."""
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(seconds=expires_seconds)
+    payload = {
+        "sub": str(user.id),
+        "scope": scope,
+        "iat": int(now.timestamp()),
+        "exp": int(expire.timestamp()),
+    }
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
@@ -252,6 +266,8 @@ async def get_current_user(
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
         )
+        if payload.get("scope") is not None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token không hợp lệ cho API này.")
         user_id_str = payload.get("sub")
         if not user_id_str:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token không hợp lệ.")

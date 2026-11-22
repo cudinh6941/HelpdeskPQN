@@ -7,9 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
+from app.core.minio_client import storage_service
 from app.core.ws_manager import ws_manager
-from app.models.models import Ticket, TicketStatus
+from app.models.models import Ticket, TicketAttachment, TicketStatus
+from app.services.notification_service import create_ticket_notifications
 from app.services.outbox_writer import emit_outbox_event
+from app.services.settings_service import get_automation_settings
 from app.services.sla_engine import ensure_utc, evaluate_ticket_sla
 
 logger = logging.getLogger(__name__)
@@ -31,10 +34,10 @@ async def auto_close_stale_resolved_tickets(
     Close RESOLVED tickets whose resolved_at is older than AUTO_CLOSE_RESOLVED_HOURS.
     Returns the number of tickets closed.
     """
-    settings = get_settings()
-    hours_threshold = (
-        max_age_hours if max_age_hours is not None else settings.AUTO_CLOSE_RESOLVED_HOURS
-    )
+    hours_threshold = max_age_hours
+    if hours_threshold is None:
+        auto_cfg = await get_automation_settings(db)
+        hours_threshold = auto_cfg["auto_close_resolved_hours"]
     current = ensure_utc(now) or datetime.now(timezone.utc)
     cutoff = current - timedelta(hours=max(1, hours_threshold))
 
@@ -62,6 +65,15 @@ async def auto_close_stale_resolved_tickets(
                 event_type="TICKET_AUTO_CLOSED",
                 summary=f"Hệ thống tự động đóng ticket {t.ticket_code} sau {hours_threshold}h ở trạng thái RESOLVED",
                 details={"auto_closed_hours": hours_threshold},
+            )
+            await create_ticket_notifications(
+                db=db,
+                ticket=t,
+                event_type="TICKET_AUTO_CLOSED",
+                title=f"Tự động đóng {t.ticket_code}",
+                body=f"Ticket {t.ticket_code} đã tự động đóng sau {hours_threshold}h ở trạng thái RESOLVED.",
+                actor_id=None,
+                is_internal=False,
             )
 
     if closed_tickets:
@@ -127,6 +139,15 @@ async def scan_sla_deadlines(db: AsyncSession, now: Optional[datetime] = None) -
                 summary=msg,
                 details={"first_response_due_at": t.first_response_due_at.isoformat()},
             )
+            await create_ticket_notifications(
+                db=db,
+                ticket=t,
+                event_type="SLA_RESPONSE_BREACHED",
+                title=f"Quá hạn phản hồi: {t.ticket_code}",
+                body=msg,
+                actor_id=None,
+                is_internal=True,
+            )
             alert_events.append((t, "TICKET_UPDATED", msg))
 
         # Check resolution warning & breach
@@ -143,6 +164,15 @@ async def scan_sla_deadlines(db: AsyncSession, now: Optional[datetime] = None) -
                     event_type="SLA_BREACHED",
                     summary=msg,
                     details={"resolution_due_at": t.resolution_due_at.isoformat()},
+                )
+                await create_ticket_notifications(
+                    db=db,
+                    ticket=t,
+                    event_type="SLA_BREACHED",
+                    title=f"Vi phạm SLA: {t.ticket_code}",
+                    body=msg,
+                    actor_id=None,
+                    is_internal=True,
                 )
                 alert_events.append((t, "TICKET_UPDATED", msg))
             elif not t.sla_warning_sent:
@@ -161,6 +191,15 @@ async def scan_sla_deadlines(db: AsyncSession, now: Optional[datetime] = None) -
                             "remaining_seconds": eval_res["remaining_seconds"],
                             "elapsed_pct": eval_res["elapsed_pct"],
                         },
+                    )
+                    await create_ticket_notifications(
+                        db=db,
+                        ticket=t,
+                        event_type="SLA_WARNING",
+                        title=f"Sắp chạm hạn SLA: {t.ticket_code}",
+                        body=msg,
+                        actor_id=None,
+                        is_internal=True,
                     )
                     alert_events.append((t, "TICKET_UPDATED", msg))
 
@@ -183,4 +222,38 @@ async def scan_sla_deadlines(db: AsyncSession, now: Optional[datetime] = None) -
         await db.rollback()
 
     auto_closed = await auto_close_stale_resolved_tickets(db, current)
-    return {"warnings": warnings, "breaches": breaches, "auto_closed": auto_closed}
+    orphans_cleaned = await cleanup_orphan_attachments(db, current)
+    return {"warnings": warnings, "breaches": breaches, "auto_closed": auto_closed, "orphans_cleaned": orphans_cleaned}
+
+
+async def cleanup_orphan_attachments(
+    db: AsyncSession,
+    now: Optional[datetime] = None,
+    max_age_hours: Optional[int] = None,
+) -> int:
+    """Delete unattached TicketAttachment records and their storage objects older than max_age_hours."""
+    hours = (
+        max_age_hours
+        if max_age_hours is not None
+        else get_settings().ORPHAN_ATTACHMENT_MAX_AGE_HOURS
+    )
+    current = ensure_utc(now) or datetime.now(timezone.utc)
+    cutoff = current - timedelta(hours=max(1, hours))
+
+    stmt = select(TicketAttachment).where(
+        TicketAttachment.ticket_id.is_(None),
+        TicketAttachment.comment_id.is_(None),
+        TicketAttachment.kb_article_id.is_(None),
+        TicketAttachment.created_at <= cutoff,
+    )
+    orphans = list((await db.execute(stmt)).scalars().all())
+    if not orphans:
+        return 0
+
+    for att in orphans:
+        storage_service.delete_object(att.object_key)
+        await db.delete(att)
+
+    await db.commit()
+    logger.info("Cleaned up %d orphan attachment(s).", len(orphans))
+    return len(orphans)

@@ -2,22 +2,38 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Inbox, Search, UserCheck } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Inbox,
+  Plus,
+  Search,
+  UserCheck,
+  X,
+} from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
 import { useNavigationProgress } from "@/components/NavigationProgress";
 import { QueueRow } from "@/components/QueueRow";
-import { Button, PriorityGlyph, SkeletonRow } from "@/components/ui/primitives";
+import { WalkupTicketModal } from "@/components/WalkupTicketModal";
+import {
+  Button,
+  PriorityGlyph,
+  SkeletonRow,
+  selectBaseClass,
+} from "@/components/ui/primitives";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/cn";
 import { isItRole, PRIORITY_LABELS } from "@/lib/formatters";
-import { Ticket, TicketPriority } from "@/lib/types";
+import { Ticket, TicketMetadata, TicketPriority, TicketStatus } from "@/lib/types";
 import { useRealtime } from "@/lib/use-realtime";
 
 type QueueFilter = "ALL" | "NEW" | "MINE" | "WAITING" | "BREACHED";
 
 const PRIORITY_ORDER: TicketPriority[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+const PAGE_SIZE = 30;
 
 export default function WorkspaceQueuePage() {
   const { user, loading: authLoading } = useAuth();
@@ -26,7 +42,15 @@ export default function WorkspaceQueuePage() {
 
   const [filter, setFilter] = useState<QueueFilter>("ALL");
   const [search, setSearch] = useState("");
+  const [groupFilter, setGroupFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [assigneeFilter, setAssigneeFilter] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState<TicketPriority | "">("");
+  const [page, setPage] = useState(0);
+
+  const [meta, setMeta] = useState<TicketMetadata | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,7 +58,9 @@ export default function WorkspaceQueuePage() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<TicketPriority>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
+  const [walkupOpen, setWalkupOpen] = useState(false);
 
   useEffect(() => {
     if (!authLoading && user && !isItRole(user.role)) {
@@ -42,14 +68,34 @@ export default function WorkspaceQueuePage() {
     }
   }, [authLoading, user, router]);
 
+  useEffect(() => {
+    if (user && isItRole(user.role)) {
+      void api
+        .getMetadata()
+        .then(setMeta)
+        .catch(() => {
+          // ignore transient metadata error
+        });
+    }
+  }, [user]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [filter, search, groupFilter, categoryFilter, assigneeFilter, priorityFilter]);
+
   const loadTickets = useCallback(
     async (silent = false) => {
       if (!silent) setLoading(true);
       setError(null);
       try {
         const params: Parameters<typeof api.listTickets>[0] = {
-          limit: 150,
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
           q: search.trim() || undefined,
+          support_group_id: groupFilter || undefined,
+          category_id: categoryFilter || undefined,
+          assignee_id: assigneeFilter || undefined,
+          priority: priorityFilter || undefined,
         };
         if (filter === "NEW") params.status = "NEW";
         else if (filter === "MINE") params.mine = true;
@@ -58,6 +104,7 @@ export default function WorkspaceQueuePage() {
 
         const res = await api.listTickets(params);
         setTickets(res.items);
+        setTotalCount(res.total);
         if (!silent) {
           setFocusedIndex(res.items.length > 0 ? 0 : -1);
         }
@@ -73,7 +120,7 @@ export default function WorkspaceQueuePage() {
         if (!silent) setLoading(false);
       }
     },
-    [filter, search]
+    [filter, search, groupFilter, categoryFilter, assigneeFilter, priorityFilter, page]
   );
 
   useEffect(() => {
@@ -139,13 +186,26 @@ export default function WorkspaceQueuePage() {
     });
   };
 
-  const handleBulkAssignToMe = async () => {
+  const runBulkAction = async (
+    payload: Omit<Parameters<typeof api.bulkTicketAction>[0], "ticket_ids">
+  ) => {
     if (checkedIds.size === 0) return;
     setBulkBusy(true);
+    setBulkNotice(null);
     try {
-      await Promise.all(Array.from(checkedIds).map((id) => api.claimTicket(id)));
+      const res = await api.bulkTicketAction({
+        ticket_ids: Array.from(checkedIds),
+        ...payload,
+      });
       setCheckedIds(new Set());
-      await loadTickets();
+      setBulkNotice(
+        res.skipped > 0
+          ? `Updated ${res.updated} ticket(s), skipped ${res.skipped}.`
+          : `Updated ${res.updated} ticket(s).`
+      );
+      await loadTickets(false);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Bulk update failed.");
     } finally {
       setBulkBusy(false);
     }
@@ -179,9 +239,9 @@ export default function WorkspaceQueuePage() {
         e.preventDefault();
         const t = flatVisibleTickets[focusedIndex];
         if (t) {
-          const target = `/workspace/tickets/${t.id}`;
-          startNavigation(target);
-          router.push(target);
+          const targetUrl = `/workspace/tickets/${t.id}`;
+          startNavigation(targetUrl);
+          router.push(targetUrl);
         }
       } else if (e.key.toLowerCase() === "e" && focusedIndex >= 0) {
         e.preventDefault();
@@ -202,6 +262,14 @@ export default function WorkspaceQueuePage() {
     { id: "WAITING", label: "Waiting on user" },
     { id: "BREACHED", label: "SLA breached" },
   ];
+
+  const hasAdvancedFilter = Boolean(
+    search.trim() || groupFilter || categoryFilter || assigneeFilter || priorityFilter || filter !== "ALL"
+  );
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const rangeStart = totalCount === 0 ? 0 : page * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(totalCount, (page + 1) * PAGE_SIZE);
 
   let runningRowIdx = 0;
 
@@ -226,34 +294,238 @@ export default function WorkspaceQueuePage() {
                 {item.label}
               </button>
             ))}
+          </div>
 
-            {checkedIds.size > 0 && (
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-72">
+              <Search
+                className="size-4 text-faint absolute left-2.5 top-2"
+                strokeWidth={1.5}
+              />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter by code, asset, title..."
+                className="w-full h-8 pl-8 pr-3 rounded-md border border-input bg-card text-[13px] text-foreground placeholder:text-faint focus:outline-none focus:border-foreground/30 focus:ring-2 focus:ring-ring/20"
+              />
+            </div>
+
+            <Button
+              type="button"
+              variant="primary"
+              size="md"
+              onClick={() => setWalkupOpen(true)}
+            >
+              <Plus className="size-3.5" strokeWidth={1.75} />
+              <span>Walk-up</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Advanced Dropdown Filters */}
+        {meta && (
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={groupFilter}
+              onChange={(e) => setGroupFilter(e.target.value)}
+              aria-label="Filter by support group"
+              className={selectBaseClass}
+            >
+              <option value="">All groups</option>
+              {meta.support_groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label="Filter by category"
+              className={selectBaseClass}
+            >
+              <option value="">All categories</option>
+              {meta.categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={assigneeFilter}
+              onChange={(e) => setAssigneeFilter(e.target.value)}
+              aria-label="Filter by assignee"
+              className={selectBaseClass}
+            >
+              <option value="">All assignees</option>
+              {meta.it_agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.full_name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value as TicketPriority | "")}
+              aria-label="Filter by priority"
+              className={selectBaseClass}
+            >
+              <option value="">All priorities</option>
+              <option value="CRITICAL">Urgent</option>
+              <option value="HIGH">High</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="LOW">Low</option>
+            </select>
+
+            {hasAdvancedFilter && (
               <Button
-                variant="outline"
-                disabled={bulkBusy}
-                onClick={() => void handleBulkAssignToMe()}
-                className="ml-2"
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFilter("ALL");
+                  setSearch("");
+                  setGroupFilter("");
+                  setCategoryFilter("");
+                  setAssigneeFilter("");
+                  setPriorityFilter("");
+                }}
               >
-                <UserCheck className="size-3.5" strokeWidth={1.5} />
-                <span>Assign to me ({checkedIds.size})</span>
+                <X className="size-3.5" strokeWidth={1.5} />
+                <span>Reset</span>
               </Button>
             )}
           </div>
+        )}
 
-          <div className="relative w-full sm:w-72">
-            <Search
-              className="size-4 text-faint absolute left-2.5 top-2"
-              strokeWidth={1.5}
-            />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter by code, asset, title..."
-              className="w-full h-8 pl-8 pr-3 rounded-md border border-input bg-card text-[13px] text-foreground placeholder:text-faint focus:outline-none focus:border-foreground/30 focus:ring-2 focus:ring-ring/20"
-            />
+        {/* Bulk Action Toolbar */}
+        {checkedIds.size > 0 && (
+          <div className="anim-fade-up rounded-md border border-border bg-card px-3 py-2 flex flex-wrap items-center gap-2">
+            <span className="text-[13px] font-medium text-foreground tabular-nums mr-1">
+              {checkedIds.size} selected
+            </span>
+
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={bulkBusy}
+              onClick={() => void runBulkAction({ action: "claim" })}
+            >
+              <UserCheck className="size-3.5" strokeWidth={1.5} />
+              <span>Assign to me</span>
+            </Button>
+
+            {meta && (
+              <>
+                <select
+                  value=""
+                  disabled={bulkBusy}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      void runBulkAction({ action: "assign", assignee_id: e.target.value });
+                    }
+                  }}
+                  aria-label="Bulk assign to agent"
+                  className={selectBaseClass}
+                >
+                  <option value="">Assign to...</option>
+                  {meta.it_agents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.full_name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value=""
+                  disabled={bulkBusy}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      void runBulkAction({ action: "assign", support_group_id: e.target.value });
+                    }
+                  }}
+                  aria-label="Bulk move support group"
+                  className={selectBaseClass}
+                >
+                  <option value="">Move group...</option>
+                  {meta.support_groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+
+            <select
+              value=""
+              disabled={bulkBusy}
+              onChange={(e) => {
+                if (e.target.value) {
+                  void runBulkAction({
+                    action: "status",
+                    status: e.target.value as TicketStatus,
+                  });
+                }
+              }}
+              aria-label="Bulk update status"
+              className={selectBaseClass}
+            >
+              <option value="">Set status...</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="WAITING_FOR_USER">Waiting on user</option>
+              <option value="RESOLVED">Resolved</option>
+              <option value="CLOSED">Closed</option>
+            </select>
+
+            <select
+              value=""
+              disabled={bulkBusy}
+              onChange={(e) => {
+                if (e.target.value) {
+                  void runBulkAction({
+                    action: "priority",
+                    priority: e.target.value as TicketPriority,
+                  });
+                }
+              }}
+              aria-label="Bulk update priority"
+              className={selectBaseClass}
+            >
+              <option value="">Set priority...</option>
+              <option value="CRITICAL">Urgent</option>
+              <option value="HIGH">High</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="LOW">Low</option>
+            </select>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setCheckedIds(new Set())}
+            >
+              Clear
+            </Button>
           </div>
-        </div>
+        )}
+
+        {bulkNotice && (
+          <div className="rounded-md border border-border bg-card px-3.5 py-2 text-[13px] text-foreground flex items-center justify-between">
+            <span>{bulkNotice}</span>
+            <button
+              type="button"
+              onClick={() => setBulkNotice(null)}
+              className="text-faint hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-2.5 text-[13px] text-destructive">
@@ -284,8 +556,18 @@ export default function WorkspaceQueuePage() {
               <p className="text-body">
                 No tickets match the current filter. Switch back to All to inspect the full queue.
               </p>
-              {filter !== "ALL" && (
-                <Button variant="outline" onClick={() => setFilter("ALL")}>
+              {hasAdvancedFilter && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setFilter("ALL");
+                    setSearch("");
+                    setGroupFilter("");
+                    setCategoryFilter("");
+                    setAssigneeFilter("");
+                    setPriorityFilter("");
+                  }}
+                >
                   View all tickets
                 </Button>
               )}
@@ -350,7 +632,52 @@ export default function WorkspaceQueuePage() {
             </div>
           )}
         </div>
+
+        {/* Pagination Bar */}
+        {!loading && totalCount > 0 && (
+          <div className="flex items-center justify-between px-1 text-meta tabular-nums">
+            <span>
+              Showing {rangeStart}–{rangeEnd} of {totalCount} ticket(s)
+            </span>
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="size-3.5" strokeWidth={1.5} />
+                <span>Prev</span>
+              </Button>
+              <span className="px-2">
+                Page {page + 1} / {totalPages}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={page + 1 >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                <span>Next</span>
+                <ChevronRight className="size-3.5" strokeWidth={1.5} />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
+
+      <WalkupTicketModal
+        open={walkupOpen}
+        onClose={() => setWalkupOpen(false)}
+        meta={meta}
+        onCreated={(created) => {
+          const target = `/workspace/tickets/${created.id}`;
+          startNavigation(target);
+          router.push(target);
+        }}
+      />
     </AppShell>
   );
 }

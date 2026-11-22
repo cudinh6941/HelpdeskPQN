@@ -242,6 +242,9 @@ class Ticket(Base):
     sla_policy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(), ForeignKey("sla_policies.id", ondelete="SET NULL"), nullable=True
     )
+    parent_ticket_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("tickets.id", ondelete="SET NULL"), index=True, nullable=True
+    )
 
     asset_code: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
     custom_data: Mapped[dict] = mapped_column(JSONType, default=dict, nullable=False)
@@ -271,6 +274,9 @@ class Ticket(Base):
     support_group: Mapped[Optional["SupportGroup"]] = relationship("SupportGroup")
     category: Mapped[Optional["Category"]] = relationship("Category")
     sla_policy: Mapped[Optional["SlaPolicy"]] = relationship("SlaPolicy")
+    parent_ticket: Mapped[Optional["Ticket"]] = relationship(
+        "Ticket", remote_side=[id], foreign_keys=[parent_ticket_id]
+    )
     comments: Mapped[list["TicketComment"]] = relationship(
         "TicketComment", back_populates="ticket", cascade="all, delete-orphan", order_by="TicketComment.created_at"
     )
@@ -406,3 +412,66 @@ class OutboxEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     actor: Mapped[Optional["User"]] = relationship("User")
+
+
+# 13. system_settings (Persistent key-value configuration)
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONType, default=dict, nullable=False)
+    updated_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+# 14. notifications (In-app notification inbox)
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_read_created", "user_id", "is_read", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid7)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    ticket_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("tickets.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    link_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# 15. canned_responses (IT Macros & Quick Replies)
+class CannedResponse(Base):
+    __tablename__ = "canned_responses"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid7)
+    shortcut: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("categories.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    target_status: Mapped[Optional[TicketStatus]] = mapped_column(
+        SAEnum(TicketStatus, name="ticket_status", native_enum=False), nullable=True
+    )
+    is_internal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    category: Mapped[Optional["Category"]] = relationship("Category")

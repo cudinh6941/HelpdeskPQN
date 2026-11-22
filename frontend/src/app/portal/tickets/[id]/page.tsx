@@ -3,9 +3,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Monitor, Paperclip, RotateCcw, Send, Star, XCircle } from "lucide-react";
+import { ArrowLeft, ExternalLink, Monitor, Paperclip, RotateCcw, Send, Star, XCircle } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
+import { AttachmentList } from "@/components/AttachmentList";
 import {
   PasteImageUploader,
   PasteUploaderHandle,
@@ -21,11 +22,13 @@ import {
   TopicBadge,
   inputBaseClass,
 } from "@/components/ui/primitives";
-import { api, buildAttachmentUrl } from "@/lib/api";
+import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import {
   formatDateTime,
   formatRelativeTime,
   formatUltraViewId,
+  isItRole,
   PRIORITY_LABELS,
 } from "@/lib/formatters";
 import { Attachment, TicketDetail } from "@/lib/types";
@@ -34,6 +37,7 @@ import { useRealtime } from "@/lib/use-realtime";
 export default function PortalTicketDetailPage() {
   const params = useParams<{ id: string }>();
   const ticketId = params.id;
+  const { user } = useAuth();
 
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -181,6 +185,15 @@ export default function PortalTicketDetailPage() {
 
             {ticket && (
               <div className="flex items-center gap-2 shrink-0">
+                {user && isItRole(user.role) && (
+                  <Link
+                    href={`/workspace/tickets/${ticket.id}`}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-border bg-card px-2.5 text-[13px] font-medium text-foreground hover:bg-muted whitespace-nowrap"
+                  >
+                    <ExternalLink className="size-3.5" strokeWidth={1.5} />
+                    <span>IT Workspace</span>
+                  </Link>
+                )}
                 {ticket.status !== "CLOSED" && ticket.status !== "CANCELLED" && (
                   <Button
                     variant="outline"
@@ -242,31 +255,7 @@ export default function PortalTicketDetailPage() {
                   <p className="pl-8 mt-1 text-body whitespace-pre-wrap">
                     {ticket.description}
                   </p>
-                  {ticket.attachments.length > 0 && (
-                    <div className="pl-8 mt-2 flex flex-wrap gap-2">
-                      {ticket.attachments.map((att) => (
-                        <a
-                          key={att.id}
-                          href={buildAttachmentUrl(att.download_url)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-sm border border-border overflow-hidden"
-                        >
-                          {att.content_type.startsWith("image/") ? (
-                            <img
-                              src={buildAttachmentUrl(att.download_url)}
-                              alt={att.file_name}
-                              className="h-24 w-auto object-cover"
-                            />
-                          ) : (
-                            <span className="px-2.5 py-1.5 text-[13px] inline-block">
-                              {att.file_name}
-                            </span>
-                          )}
-                        </a>
-                      ))}
-                    </div>
-                  )}
+                  <AttachmentList attachments={ticket.attachments} />
                 </div>
 
                 {/* Rating prompt when RESOLVED */}
@@ -320,24 +309,7 @@ export default function PortalTicketDetailPage() {
                       </span>
                     </div>
                     <p className="pl-8 mt-1 text-body whitespace-pre-wrap">{c.body}</p>
-                    {c.attachments.length > 0 && (
-                      <div className="pl-8 mt-2 flex flex-wrap gap-2">
-                        {c.attachments.map((att) => (
-                          <a
-                            key={att.id}
-                            href={buildAttachmentUrl(att.download_url)}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <img
-                              src={buildAttachmentUrl(att.download_url)}
-                              alt={att.file_name}
-                              className="h-24 rounded-sm border border-border"
-                            />
-                          </a>
-                        ))}
-                      </div>
-                    )}
+                    <AttachmentList attachments={c.attachments} />
                   </div>
                 ))}
               </div>

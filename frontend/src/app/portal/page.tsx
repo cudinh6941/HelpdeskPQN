@@ -62,7 +62,7 @@ export default function EmployeePortalPage() {
     try {
       const [meta, list, kbRes] = await Promise.all([
         api.getMetadata(),
-        api.listTickets({ limit: 50 }),
+        api.listTickets({ limit: 50, requested_by_me: true }),
         api.listKbArticles({ visibility: "PUBLIC" }).catch(() => ({ items: [], total: 0 })),
       ]);
       setCategories(meta.categories);
