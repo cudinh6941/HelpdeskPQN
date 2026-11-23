@@ -296,6 +296,9 @@ class TicketComment(Base):
     author_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    kb_article_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        GUID(), ForeignKey("kb_articles.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -305,6 +308,7 @@ class TicketComment(Base):
 
     ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="comments")
     author: Mapped["User"] = relationship("User")
+    kb_article: Mapped[Optional["KbArticle"]] = relationship("KbArticle")
     attachments: Mapped[list["TicketAttachment"]] = relationship(
         "TicketAttachment", back_populates="comment"
     )

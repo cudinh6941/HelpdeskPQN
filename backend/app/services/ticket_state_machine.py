@@ -13,6 +13,7 @@ ALLOWED_TRANSITIONS: dict[TicketStatus, set[TicketStatus]] = {
     TicketStatus.ASSIGNED: {
         TicketStatus.IN_PROGRESS,
         TicketStatus.WAITING_FOR_USER,
+        TicketStatus.RESOLVED,
         TicketStatus.CANCELLED,
     },
     TicketStatus.IN_PROGRESS: {
@@ -80,6 +81,7 @@ def transition_ticket_status(
             (TicketStatus.RESOLVED, TicketStatus.CLOSED),
             (TicketStatus.RESOLVED, TicketStatus.REOPENED),
             (TicketStatus.WAITING_FOR_USER, TicketStatus.IN_PROGRESS),
+            (TicketStatus.WAITING_FOR_USER, TicketStatus.CLOSED),
         }
         if (previous_status, target_status) not in end_user_allowed:
             raise HTTPException(

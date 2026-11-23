@@ -7,10 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.attachments import serialize_attachment
+from app.api.v1.kb import serialize_kb_brief
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.ws_manager import ws_manager
 from app.models.models import (
+    KbArticle,
+    KbVisibility,
     Ticket,
     TicketAttachment,
     TicketComment,
@@ -22,7 +25,7 @@ from app.schemas.schemas import CommentCreate, CommentOut
 from app.services.notification_service import create_ticket_notifications
 from app.services.outbox_writer import emit_outbox_event
 from app.services.sla_engine import resume_ticket_sla
-from app.services.ticket_state_machine import IT_ROLES, stamp_first_response_if_needed
+from app.services.ticket_state_machine import IT_ROLES, stamp_first_response_if_needed, transition_ticket_status
 from app.services.ultraview_service import extract_ultraview_credentials
 
 router = APIRouter(prefix="/tickets", tags=["Ticket Comments"])
@@ -49,10 +52,31 @@ async def add_ticket_comment(
             detail="Chỉ nhân viên IT mới được tạo ghi chú nội bộ.",
         )
 
+    attached_kb: KbArticle | None = None
+    if payload.kb_article_id is not None:
+        if current_user.role not in IT_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chỉ nhân viên IT mới được đính kèm bài Knowledge Base.",
+            )
+        attached_kb = (
+            await db.execute(
+                select(KbArticle).where(KbArticle.id == payload.kb_article_id, KbArticle.is_active == True)
+            )
+        ).scalar_one_or_none()
+        if attached_kb is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy bài viết Knowledge Base.")
+        if not payload.is_internal and attached_kb.visibility != KbVisibility.PUBLIC:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Không thể gửi bài IT Runbook nội bộ ra cho nhân viên. Hãy chọn bài Self-Help (PUBLIC) hoặc chuyển sang Internal note.",
+            )
+
     now = datetime.now(timezone.utc)
     comment = TicketComment(
         ticket_id=ticket.id,
         author_id=current_user.id,
+        kb_article_id=attached_kb.id if attached_kb else None,
         body=payload.body.strip(),
         is_internal=payload.is_internal,
         created_at=now,
@@ -79,6 +103,24 @@ async def add_ticket_comment(
         resumed_seconds = resume_ticket_sla(ticket, now)
         ticket.status = TicketStatus.IN_PROGRESS
         ticket.updated_at = now
+
+    if (
+        payload.pause_for_user
+        and current_user.role in IT_ROLES
+        and not payload.is_internal
+        and ticket.status
+        in (
+            TicketStatus.NEW,
+            TicketStatus.ASSIGNED,
+            TicketStatus.IN_PROGRESS,
+            TicketStatus.REOPENED,
+        )
+    ):
+        if ticket.assignee_id is None:
+            ticket.assignee_id = current_user.id
+        if ticket.status == TicketStatus.NEW:
+            transition_ticket_status(ticket, TicketStatus.IN_PROGRESS, current_user, now)
+        transition_ticket_status(ticket, TicketStatus.WAITING_FOR_USER, current_user, now)
 
     if not payload.is_internal:
         stamp_first_response_if_needed(ticket, current_user, now)
@@ -108,6 +150,8 @@ async def add_ticket_comment(
             "comment_id": str(comment.id),
             "body_preview": comment.body[:160],
             "resumed_sla_seconds": resumed_seconds,
+            "kb_article_id": str(attached_kb.id) if attached_kb else None,
+            "kb_title": attached_kb.title if attached_kb else None,
         },
         is_internal=payload.is_internal,
     )
@@ -152,10 +196,16 @@ async def add_ticket_comment(
 
     loaded_res = await db.execute(
         select(TicketComment)
-        .options(selectinload(TicketComment.author), selectinload(TicketComment.attachments))
+        .options(
+            selectinload(TicketComment.author),
+            selectinload(TicketComment.attachments),
+            selectinload(TicketComment.kb_article).selectinload(KbArticle.category),
+            selectinload(TicketComment.kb_article).selectinload(KbArticle.attachments),
+        )
         .where(TicketComment.id == comment.id)
     )
     loaded = loaded_res.scalar_one()
+    is_it = current_user.role in IT_ROLES
     return CommentOut(
         id=loaded.id,
         ticket_id=loaded.ticket_id,
@@ -163,6 +213,8 @@ async def add_ticket_comment(
         author=loaded.author,
         body=loaded.body,
         is_internal=loaded.is_internal,
+        kb_article_id=loaded.kb_article_id,
+        kb_article=serialize_kb_brief(loaded.kb_article, include_notes=is_it) if loaded.kb_article else None,
         created_at=loaded.created_at,
         attachments=[serialize_attachment(a) for a in loaded.attachments],
     )

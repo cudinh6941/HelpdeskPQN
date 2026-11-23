@@ -7,6 +7,7 @@ import { ArrowLeft, ExternalLink, Monitor, Paperclip, RotateCcw, Send, Star, XCi
 
 import { AppShell } from "@/components/AppShell";
 import { AttachmentList } from "@/components/AttachmentList";
+import { CommentKbCard } from "@/components/CommentKbCard";
 import {
   PasteImageUploader,
   PasteUploaderHandle,
@@ -49,6 +50,7 @@ export default function PortalTicketDetailPage() {
   const [rating, setRating] = useState(5);
   const [feedback, setFeedback] = useState("");
   const [ratingBusy, setRatingBusy] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
 
   const [showUvForm, setShowUvForm] = useState(false);
   const [uvId, setUvId] = useState("");
@@ -57,6 +59,7 @@ export default function PortalTicketDetailPage() {
 
   const uploaderRef = useRef<PasteUploaderHandle | null>(null);
   const uvPassInputRef = useRef<HTMLInputElement | null>(null);
+  const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -142,9 +145,19 @@ export default function PortalTicketDetailPage() {
     }
   };
 
-  const handleStatusChange = async (status: "CANCELLED" | "REOPENED" | "CLOSED") => {
-    await api.updateTicketStatus(ticketId, status);
-    await loadTicket();
+  const handleStatusChange = async (
+    status: "CANCELLED" | "REOPENED" | "CLOSED" | "IN_PROGRESS"
+  ) => {
+    setStatusBusy(true);
+    try {
+      await api.updateTicketStatus(ticketId, status);
+      await loadTicket();
+      if (status === "IN_PROGRESS") {
+        window.setTimeout(() => replyTextareaRef.current?.focus(), 60);
+      }
+    } finally {
+      setStatusBusy(false);
+    }
   };
 
   const handleRate = async (e: React.FormEvent) => {
@@ -299,19 +312,31 @@ export default function PortalTicketDetailPage() {
                 )}
 
                 {/* Comments Stream (no bubbles) */}
-                {ticket.comments.map((c) => (
-                  <div key={c.id} className="anim-fade-up">
-                    <div className="flex items-center gap-2">
-                      <Avatar name={c.author.full_name} />
-                      <span className="text-body-strong">{c.author.full_name}</span>
-                      <span className="text-meta-faint tabular-nums">
-                        {formatRelativeTime(c.created_at)}
-                      </span>
+                {ticket.comments.map((c, idx) => {
+                  const isLatest = idx === ticket.comments.length - 1;
+                  return (
+                    <div key={c.id} className="anim-fade-up">
+                      <div className="flex items-center gap-2">
+                        <Avatar name={c.author.full_name} />
+                        <span className="text-body-strong">{c.author.full_name}</span>
+                        <span className="text-meta-faint tabular-nums">
+                          {formatRelativeTime(c.created_at)}
+                        </span>
+                      </div>
+                      <p className="pl-8 mt-1 text-body whitespace-pre-wrap">{c.body}</p>
+                      <AttachmentList attachments={c.attachments} />
+                      {c.kb_article && (
+                        <CommentKbCard
+                          kb={c.kb_article}
+                          showUserActions={isLatest && ticket.status === "WAITING_FOR_USER"}
+                          actionBusy={statusBusy}
+                          onUserSolved={() => void handleStatusChange("CLOSED")}
+                          onUserNeedHelp={() => void handleStatusChange("IN_PROGRESS")}
+                        />
+                      )}
                     </div>
-                    <p className="pl-8 mt-1 text-body whitespace-pre-wrap">{c.body}</p>
-                    <AttachmentList attachments={c.attachments} />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -377,6 +402,7 @@ export default function PortalTicketDetailPage() {
                   </p>
                 )}
                 <textarea
+                  ref={replyTextareaRef}
                   rows={3}
                   value={commentBody}
                   onChange={(e) => setCommentBody(e.target.value)}

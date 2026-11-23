@@ -1403,3 +1403,115 @@ async def test_canned_responses_macros_crud():
             headers=agent_headers,
         )
         assert del_resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_assigned_ticket_can_resolve_without_ultraview():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        user_token = await _login(client, "nhanvien")
+        agent_token = await _login(client, "kythuat")
+        user_headers = {"Authorization": f"Bearer {user_token}"}
+        agent_headers = {"Authorization": f"Bearer {agent_token}"}
+
+        # 1. Create ticket, assign to agent -> status becomes ASSIGNED
+        created = (
+            await client.post(
+                "/api/v1/tickets",
+                headers=user_headers,
+                json={"title": "Cần cài lại driver máy in", "description": "Không in được PDF."},
+            )
+        ).json()
+        me_agent = (await client.get("/api/v1/auth/me", headers=agent_headers)).json()
+        assigned = (
+            await client.post(
+                f"/api/v1/tickets/{created['id']}/assign",
+                headers=agent_headers,
+                json={"assignee_id": me_agent["id"]},
+            )
+        ).json()
+        assert assigned["status"] == "ASSIGNED"
+
+        # 2. Directly transition ASSIGNED -> RESOLVED without requesting UltraViewer
+        resolved = await client.patch(
+            f"/api/v1/tickets/{created['id']}/status",
+            headers=agent_headers,
+            json={"status": "RESOLVED", "note": "Đã xử lý trực tiếp tại chỗ."},
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["status"] == "RESOLVED"
+        assert resolved.json()["resolved_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_kb_suggest_attach_to_comment_and_user_self_close():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        user_token = await _login(client, "nhanvien")
+        agent_token = await _login(client, "kythuat")
+        user_headers = {"Authorization": f"Bearer {user_token}"}
+        agent_headers = {"Authorization": f"Bearer {agent_token}"}
+
+        # 1. User creates a VPN ticket
+        created = (
+            await client.post(
+                "/api/v1/tickets",
+                headers=user_headers,
+                json={
+                    "title": "Lỗi FortiClient VPN không kết nối được",
+                    "description": "Báo Credential failed khi bật VPN ở nhà.",
+                },
+            )
+        ).json()
+        tid = created["id"]
+
+        # 2. END_USER forbidden from /kb/suggest; IT_AGENT gets relevant KB suggestions
+        assert (await client.get(f"/api/v1/kb/suggest?ticket_id={tid}", headers=user_headers)).status_code == 403
+        sug_resp = await client.get(f"/api/v1/kb/suggest?ticket_id={tid}", headers=agent_headers)
+        assert sug_resp.status_code == 200
+        kb_items = sug_resp.json()["items"]
+        assert len(kb_items) >= 1
+
+        all_kb = (await client.get("/api/v1/kb", headers=agent_headers)).json()["items"]
+        public_kb = next(a for a in all_kb if a["visibility"] == "PUBLIC")
+        internal_kb = next(a for a in all_kb if a["visibility"] == "INTERNAL")
+
+        # 3. Cannot send INTERNAL KB runbook in a public reply
+        leak_resp = await client.post(
+            f"/api/v1/tickets/{tid}/comments",
+            headers=agent_headers,
+            json={
+                "body": "Thử hướng dẫn này",
+                "is_internal": False,
+                "kb_article_id": internal_kb["id"],
+                "pause_for_user": True,
+            },
+        )
+        assert leak_resp.status_code == 400
+
+        # 4. Send PUBLIC KB card with pause_for_user=True -> status becomes WAITING_FOR_USER
+        send_resp = await client.post(
+            f"/api/v1/tickets/{tid}/comments",
+            headers=agent_headers,
+            json={
+                "body": "Bạn làm theo các bước dưới đây nhé.",
+                "is_internal": False,
+                "kb_article_id": public_kb["id"],
+                "pause_for_user": True,
+            },
+        )
+        assert send_resp.status_code == 201, send_resp.text
+        comment_data = send_resp.json()
+        assert comment_data["kb_article_id"] == public_kb["id"]
+        assert comment_data["kb_article"]["title"] == public_kb["title"]
+
+        detail = (await client.get(f"/api/v1/tickets/{tid}", headers=user_headers)).json()
+        assert detail["status"] == "WAITING_FOR_USER"
+        assert detail["comments"][-1]["kb_article"]["id"] == public_kb["id"]
+
+        # 5. User confirms solved -> closes ticket cleanly from WAITING_FOR_USER
+        close_resp = await client.patch(
+            f"/api/v1/tickets/{tid}/status",
+            headers=user_headers,
+            json={"status": "CLOSED"},
+        )
+        assert close_resp.status_code == 200, close_resp.text
+        assert close_resp.json()["status"] == "CLOSED"

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from typing import Optional
 import uuid
 
@@ -23,6 +24,7 @@ from app.models.models import (
     UserRole,
 )
 from app.schemas.schemas import (
+    KbArticleBriefOut,
     KbArticleCreateRequest,
     KbArticleDetailOut,
     KbArticleListResponse,
@@ -52,6 +54,21 @@ def _serialize_kb(article: KbArticle) -> KbArticleDetailOut:
         for att in sorted(article.attachments or [], key=lambda a: a.created_at)
     ]
     return data
+
+
+def serialize_kb_brief(article: KbArticle, include_notes: bool = True) -> KbArticleBriefOut:
+    return KbArticleBriefOut(
+        id=article.id,
+        visibility=article.visibility,
+        title=article.title,
+        category=article.category,
+        steps=list(article.steps or []),
+        notes=article.notes if include_notes else None,
+        attachments=[
+            serialize_attachment(att)
+            for att in sorted(article.attachments or [], key=lambda a: a.created_at)
+        ],
+    )
 
 
 async def _link_attachments(
@@ -141,6 +158,69 @@ async def list_kb_articles(
         rows = [r for r in rows if _matches_query(r, q_lower)]
 
     return KbArticleListResponse(items=[_serialize_kb(r) for r in rows], total=len(rows))
+
+
+@router.get("/suggest", response_model=KbArticleListResponse)
+async def suggest_kb_for_ticket(
+    ticket_id: uuid.UUID = Query(...),
+    limit: int = Query(default=3, ge=1, le=10),
+    _: User = Depends(IT_KB_ROLES),
+    db: AsyncSession = Depends(get_db),
+):
+    t_row = (
+        await db.execute(
+            select(Ticket.category_id, Ticket.title, Ticket.description).where(Ticket.id == ticket_id)
+        )
+    ).first()
+    if t_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy ticket.")
+
+    t_cat_id, t_title, t_desc = t_row
+    text_lower = f"{t_title or ''} {t_desc or ''}".lower()
+    tokens = {tok for tok in re.findall(r"[a-zA-Z0-9À-ỹ]{3,}", text_lower)}
+
+    candidates = (
+        await db.execute(
+            select(
+                KbArticle.id,
+                KbArticle.category_id,
+                KbArticle.title,
+                KbArticle.symptoms,
+                KbArticle.keywords,
+                KbArticle.updated_at,
+            ).where(KbArticle.is_active == True)
+        )
+    ).all()
+
+    scored: list[tuple[int, datetime, uuid.UUID]] = []
+    for kb_id, kb_cat_id, kb_title, kb_symptoms, kb_keywords, kb_updated_at in candidates:
+        score = 0
+        if t_cat_id is not None and kb_cat_id == t_cat_id:
+            score += 3
+        for kw in (kb_keywords or []):
+            kw_low = str(kw).strip().lower()
+            if kw_low and kw_low in text_lower:
+                score += 4
+        kb_text = f"{kb_title or ''} {kb_symptoms or ''}".lower()
+        kb_tokens = set(re.findall(r"[a-zA-Z0-9À-ỹ]{3,}", kb_text))
+        overlap = len(tokens & kb_tokens)
+        score += min(overlap, 6)
+        if score > 0:
+            scored.append((score, kb_updated_at, kb_id))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    top_ids = [item[2] for item in scored[:limit]]
+    if not top_ids:
+        return KbArticleListResponse(items=[], total=0)
+
+    rows = (
+        await db.execute(
+            select(KbArticle).options(*_kb_options()).where(KbArticle.id.in_(top_ids))
+        )
+    ).scalars().all()
+    by_id = {r.id: r for r in rows}
+    ordered = [by_id[i] for i in top_ids if i in by_id]
+    return KbArticleListResponse(items=[_serialize_kb(r) for r in ordered], total=len(ordered))
 
 
 @router.get("/{article_id}", response_model=KbArticleDetailOut)

@@ -261,7 +261,13 @@ export const api = {
   // Comments
   addComment: (
     ticketId: string,
-    payload: { body: string; is_internal: boolean; attachment_ids?: string[] }
+    payload: {
+      body: string;
+      is_internal: boolean;
+      attachment_ids?: string[];
+      kb_article_id?: string | null;
+      pause_for_user?: boolean;
+    }
   ) =>
     apiFetch<TicketComment>(`/api/v1/tickets/${ticketId}/comments`, {
       method: "POST",
@@ -518,6 +524,10 @@ export const api = {
     const query = qs.toString() ? `?${qs.toString()}` : "";
     return apiFetch<{ items: KbArticleDetail[]; total: number }>(`/api/v1/kb${query}`);
   },
+  suggestKbForTicket: (ticketId: string, limit = 3) =>
+    apiFetch<{ items: KbArticleDetail[]; total: number }>(
+      `/api/v1/kb/suggest?ticket_id=${encodeURIComponent(ticketId)}&limit=${limit}`
+    ),
   getKbArticle: (articleId: string) =>
     apiFetch<KbArticleDetail>(`/api/v1/kb/${articleId}`),
   createKbArticle: (payload: {

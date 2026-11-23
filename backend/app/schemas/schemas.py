@@ -221,10 +221,23 @@ class PresignedUploadResponse(BaseModel):
     use_presigned: bool
 
 
+class KbArticleBriefOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    visibility: KbVisibility
+    title: str
+    category: Optional[CategoryOut] = None
+    steps: list[str] = Field(default_factory=list)
+    notes: Optional[str] = None
+    attachments: list[AttachmentOut] = Field(default_factory=list)
+
+
 class CommentCreate(BaseModel):
     body: str = Field(..., min_length=1, max_length=10000)
     is_internal: bool = False
     attachment_ids: list[uuid.UUID] = Field(default_factory=list)
+    kb_article_id: Optional[uuid.UUID] = None
+    pause_for_user: bool = False
 
 
 class CommentOut(BaseModel):
@@ -235,6 +248,8 @@ class CommentOut(BaseModel):
     author: UserBriefOut
     body: str
     is_internal: bool
+    kb_article_id: Optional[uuid.UUID] = None
+    kb_article: Optional[KbArticleBriefOut] = None
     created_at: datetime
     attachments: list[AttachmentOut] = Field(default_factory=list)
 

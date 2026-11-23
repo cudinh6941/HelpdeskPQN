@@ -8,12 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.attachments import serialize_attachment
+from app.api.v1.kb import serialize_kb_brief
 from app.core.database import get_db
 from app.core.security import get_current_user, require_roles
 from app.core.ws_manager import ws_manager
 from app.models.models import (
     BusinessCalendar,
     Category,
+    KbArticle,
     OutboxEvent,
     SlaPolicy,
     SupportGroup,
@@ -563,6 +565,8 @@ async def get_ticket_detail(
             *_ticket_options(),
             selectinload(Ticket.comments).selectinload(TicketComment.author),
             selectinload(Ticket.comments).selectinload(TicketComment.attachments),
+            selectinload(Ticket.comments).selectinload(TicketComment.kb_article).selectinload(KbArticle.category),
+            selectinload(Ticket.comments).selectinload(TicketComment.kb_article).selectinload(KbArticle.attachments),
             selectinload(Ticket.attachments),
         )
         .where(Ticket.id == ticket_id)
@@ -590,6 +594,8 @@ async def get_ticket_detail(
             author=c.author,
             body=c.body,
             is_internal=c.is_internal,
+            kb_article_id=c.kb_article_id,
+            kb_article=serialize_kb_brief(c.kb_article, include_notes=is_it) if c.kb_article else None,
             created_at=c.created_at,
             attachments=[serialize_attachment(a) for a in c.attachments],
         )

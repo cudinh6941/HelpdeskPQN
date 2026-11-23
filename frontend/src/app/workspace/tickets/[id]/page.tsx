@@ -16,12 +16,14 @@ import {
   Paperclip,
   PanelRight,
   Send,
+  Sparkles,
   X,
   Zap,
 } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
 import { AttachmentList } from "@/components/AttachmentList";
+import { CommentKbCard } from "@/components/CommentKbCard";
 import { useNavigationProgress } from "@/components/NavigationProgress";
 import {
   PasteImageUploader,
@@ -96,6 +98,10 @@ export default function WorkspaceTicketDetailPage() {
   const [kbInsertQuery, setKbInsertQuery] = useState("");
   const [kbArticles, setKbArticles] = useState<KbArticleDetail[]>([]);
   const [kbLoaded, setKbLoaded] = useState(false);
+  const [suggestedKb, setSuggestedKb] = useState<KbArticleDetail[]>([]);
+  const [previewKb, setPreviewKb] = useState<KbArticleDetail | null>(null);
+  const [attachedKb, setAttachedKb] = useState<KbArticleDetail | null>(null);
+  const [pauseForUser, setPauseForUser] = useState(true);
   const [macroPickerOpen, setMacroPickerOpen] = useState(false);
   const [macroQuery, setMacroQuery] = useState("");
   const [macros, setMacros] = useState<CannedResponse[]>([]);
@@ -110,17 +116,19 @@ export default function WorkspaceTicketDetailPage() {
   const loadData = useCallback(async () => {
     setError(null);
     try {
-      const [detail, metadata, list, rel] = await Promise.all([
+      const [detail, metadata, list, rel, kbSuggest] = await Promise.all([
         api.getTicket(ticketId),
         api.getMetadata(),
         api.listTickets({ limit: 80 }),
         api.getTicketRelated(ticketId).catch(() => null),
+        api.suggestKbForTicket(ticketId, 3).catch(() => ({ items: [], total: 0 })),
       ]);
       setTicket(detail);
       setAssetDraft(detail.asset_code || "");
       setMeta(metadata);
       setQueueTickets(list.items);
       setRelated(rel);
+      setSuggestedKb(kbSuggest.items);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load ticket");
     } finally {
@@ -360,6 +368,21 @@ export default function WorkspaceTicketDetailPage() {
     setKbInsertQuery("");
     window.setTimeout(() => composerRef.current?.focus(), 30);
   };
+
+  const handleAttachKbCard = (art: KbArticleDetail) => {
+    if (art.visibility === "INTERNAL" && composerTab === "reply") {
+      setComposerTab("note");
+    }
+    setAttachedKb(art);
+    setPauseForUser(true);
+    if (art.visibility === "PUBLIC" && composerTab === "reply" && !replyDraft.trim()) {
+      setReplyDraft("Mình gửi bạn hướng dẫn xử lý nhanh bên dưới, bạn thử làm theo và xác nhận kết quả giúp IT nhé.");
+    }
+    setKbInsertOpen(false);
+    setKbInsertQuery("");
+    setPreviewKb(null);
+    window.setTimeout(() => composerRef.current?.focus(), 30);
+  };
   const currentAttachments =
     composerTab === "reply" ? replyAttachments : noteAttachments;
   const setCurrentAttachments =
@@ -380,15 +403,21 @@ export default function WorkspaceTicketDetailPage() {
 
   const handleSendComposer = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const text = currentDraft.trim();
+    const isInternal = composerTab === "note";
+    const canSendKb = Boolean(attachedKb && (isInternal || attachedKb.visibility === "PUBLIC"));
+    const text =
+      currentDraft.trim() ||
+      (canSendKb && attachedKb ? `Mình gửi bạn hướng dẫn: ${attachedKb.title}` : "");
     if (!text || sending) return;
     setSending(true);
-    const isInternal = composerTab === "note";
+    setError(null);
     try {
       await api.addComment(ticketId, {
         body: text,
         is_internal: isInternal,
         attachment_ids: currentAttachments.map((a) => a.id),
+        kb_article_id: canSendKb && attachedKb ? attachedKb.id : null,
+        pause_for_user: !isInternal && canSendKb && pauseForUser,
       });
       if (isInternal) {
         setNoteDraft("");
@@ -406,8 +435,11 @@ export default function WorkspaceTicketDetailPage() {
         }
       }
       setPendingMacroStatus(null);
+      setAttachedKb(null);
       setShowUploader(false);
       await loadData();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not send message.");
     } finally {
       setSending(false);
     }
@@ -961,6 +993,16 @@ export default function WorkspaceTicketDetailPage() {
                     </Button>
                   )}
 
+                {(ticket.status === "ASSIGNED" || ticket.status === "REOPENED") && (
+                  <Button
+                    variant="outline"
+                    disabled={actionBusy}
+                    onClick={() => void handleStatusChange("IN_PROGRESS")}
+                  >
+                    Start work
+                  </Button>
+                )}
+
                 {ticket.status === "IN_PROGRESS" && (
                   <Button
                     variant="outline"
@@ -981,7 +1023,8 @@ export default function WorkspaceTicketDetailPage() {
                   </Button>
                 )}
 
-                {(ticket.status === "IN_PROGRESS" ||
+                {(ticket.status === "ASSIGNED" ||
+                  ticket.status === "IN_PROGRESS" ||
                   ticket.status === "WAITING_FOR_USER" ||
                   ticket.status === "REOPENED") && (
                   <Button
@@ -1004,6 +1047,35 @@ export default function WorkspaceTicketDetailPage() {
               </div>
             )}
           </div>
+
+          {/* Smart Suggested KB Strip for IT */}
+          {ticket &&
+            ticket.status !== "CLOSED" &&
+            ticket.status !== "CANCELLED" &&
+            suggestedKb.length > 0 && (
+              <div className="px-4 py-2 border-b border-border-subtle bg-background flex items-center gap-2 flex-wrap shrink-0">
+                <span className="inline-flex items-center gap-1 text-[12px] font-medium text-muted-foreground shrink-0">
+                  <Sparkles className="size-3.5 text-[var(--action-reply)]" strokeWidth={1.5} />
+                  <span>Suggested KB:</span>
+                </span>
+                {suggestedKb.map((art) => (
+                  <button
+                    key={art.id}
+                    type="button"
+                    onClick={() => setPreviewKb(art)}
+                    className="inline-flex h-6 items-center gap-1.5 rounded-sm border border-border bg-card px-2 text-[12px] text-foreground hover:bg-muted transition-colors duration-75 max-w-[260px]"
+                    title={art.title}
+                  >
+                    {art.visibility === "INTERNAL" ? (
+                      <Lock className="size-3 text-note-ink shrink-0" strokeWidth={1.5} />
+                    ) : (
+                      <BookOpen className="size-3 text-[var(--action-reply)] shrink-0" strokeWidth={1.5} />
+                    )}
+                    <span className="truncate">{art.title}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
           {/* Scrollable Thread */}
           <div className="flex-1 overflow-y-auto px-4 py-4">
@@ -1093,6 +1165,7 @@ export default function WorkspaceTicketDetailPage() {
                         );
                       })()}
                         <AttachmentList attachments={c.attachments} noteStyle />
+                        {c.kb_article && <CommentKbCard kb={c.kb_article} />}
                       </div>
                     );
                   }
@@ -1148,6 +1221,7 @@ export default function WorkspaceTicketDetailPage() {
                         );
                       })()}
                       <AttachmentList attachments={c.attachments} />
+                      {c.kb_article && <CommentKbCard kb={c.kb_article} />}
                     </div>
                   );
                 })}
@@ -1248,6 +1322,51 @@ export default function WorkspaceTicketDetailPage() {
                   }
                   className="w-full resize-none bg-transparent text-body placeholder:text-faint focus:outline-none"
                 />
+
+                {attachedKb && (
+                  <div className="mt-2 rounded-sm border border-border bg-background px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[12px]">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <BookOpen className="size-3.5 text-[var(--action-reply)] shrink-0" strokeWidth={1.5} />
+                      <span className="font-medium text-foreground truncate">
+                        KB Card: {attachedKb.title}
+                      </span>
+                      <span className="text-muted-foreground shrink-0">
+                        ({attachedKb.steps.length} steps
+                        {attachedKb.attachments.length > 0
+                          ? `, ${attachedKb.attachments.length} files`
+                          : ""}
+                        )
+                      </span>
+                      {composerTab === "reply" && attachedKb.visibility === "INTERNAL" && (
+                        <span className="text-destructive shrink-0">
+                          (Internal Runbook — switch to Internal note)
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3 shrink-0">
+                      {composerTab === "reply" && attachedKb.visibility === "PUBLIC" && (
+                        <label className="inline-flex items-center gap-1.5 text-muted-foreground cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={pauseForUser}
+                            onChange={(e) => setPauseForUser(e.target.checked)}
+                            className="rounded-xs border-input"
+                          />
+                          <span>Wait on user (pause SLA)</span>
+                        </label>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setAttachedKb(null)}
+                        className="text-faint hover:text-foreground"
+                        aria-label="Remove attached KB card"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {pendingMacroStatus && (
                   <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-sm border border-border bg-background px-2 py-0.5 text-[12px] text-foreground">
@@ -1385,7 +1504,7 @@ export default function WorkspaceTicketDetailPage() {
                           <X className="size-3.5" strokeWidth={1.5} />
                         </button>
                       </div>
-                      <div className="max-h-56 overflow-y-auto divide-y divide-border-subtle">
+                      <div className="max-h-64 overflow-y-auto divide-y divide-border-subtle">
                         {kbArticles
                           .filter((a) => {
                             const q = kbInsertQuery.trim().toLowerCase();
@@ -1396,23 +1515,52 @@ export default function WorkspaceTicketDetailPage() {
                             );
                           })
                           .slice(0, 8)
-                          .map((art) => (
-                            <button
-                              key={art.id}
-                              type="button"
-                              onClick={() => handleInsertKbArticle(art)}
-                              className="w-full text-left px-3 py-2 hover:bg-muted/60 transition-colors duration-75"
-                            >
-                              <p className="text-[13px] font-medium text-foreground truncate">
-                                {art.title}
-                              </p>
-                              <p className="text-[12px] text-muted-foreground truncate">
-                                {art.visibility === "INTERNAL" ? "IT Runbook" : "Self-Help"}
-                                {art.category ? ` · ${art.category.name}` : ""}
-                                {` · ${art.steps.length} steps`}
-                              </p>
-                            </button>
-                          ))}
+                          .map((art) => {
+                            const canAttachHere =
+                              composerTab === "note" || art.visibility === "PUBLIC";
+                            return (
+                              <div
+                                key={art.id}
+                                className="px-3 py-2 hover:bg-muted/40 transition-colors duration-75 space-y-1.5"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-[13px] font-medium text-foreground truncate">
+                                    {art.title}
+                                  </p>
+                                  <p className="text-[12px] text-muted-foreground truncate">
+                                    {art.visibility === "INTERNAL" ? "IT Runbook" : "Self-Help"}
+                                    {art.category ? ` · ${art.category.name}` : ""}
+                                    {` · ${art.steps.length} steps`}
+                                    {art.attachments.length > 0
+                                      ? ` · ${art.attachments.length} imgs`
+                                      : ""}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleInsertKbArticle(art)}
+                                    className="h-6 px-2 rounded-xs border border-border bg-card text-[11px] font-medium text-foreground hover:bg-muted"
+                                  >
+                                    Insert text
+                                  </button>
+                                  {canAttachHere ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAttachKbCard(art)}
+                                      className="h-6 px-2 rounded-xs border border-border bg-primary text-[11px] font-medium text-primary-foreground hover:opacity-90"
+                                    >
+                                      Attach KB card
+                                    </button>
+                                  ) : (
+                                    <span className="text-[11px] text-faint">
+                                      Internal only (use Note tab)
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
                       </div>
                     </div>
                   )}
@@ -1420,7 +1568,11 @@ export default function WorkspaceTicketDetailPage() {
                   <Button
                     type="submit"
                     variant={composerTab === "note" ? "note" : "primary"}
-                    disabled={!currentDraft.trim() || sending}
+                    disabled={
+                      (!currentDraft.trim() && !attachedKb) ||
+                      (composerTab === "reply" && attachedKb?.visibility === "INTERNAL") ||
+                      sending
+                    }
                   >
                     {composerTab === "note" ? (
                       <Lock className="size-3.5" strokeWidth={1.5} />
@@ -1473,6 +1625,115 @@ export default function WorkspaceTicketDetailPage() {
           ticket={ticket}
           categories={meta?.categories || []}
         />
+      )}
+
+      {previewKb && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Preview suggested Knowledge Base article"
+          onClick={() => setPreviewKb(null)}
+          className="anim-scrim fixed inset-0 z-50 bg-[var(--scrim)] backdrop-blur-[2px] flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="anim-popover w-full max-w-[620px] max-h-[85dvh] rounded-xl border border-border bg-card shadow-popover overflow-hidden flex flex-col"
+          >
+            <div className="h-11 px-4 border-b border-border flex items-center justify-between gap-3 bg-background shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                {previewKb.visibility === "INTERNAL" ? (
+                  <Lock className="size-3.5 text-note-ink shrink-0" strokeWidth={1.5} />
+                ) : (
+                  <BookOpen className="size-3.5 text-[var(--action-reply)] shrink-0" strokeWidth={1.5} />
+                )}
+                <span className="text-body-strong truncate">{previewKb.title}</span>
+              </div>
+              <Button type="button" variant="icon" onClick={() => setPreviewKb(null)}>
+                <X className="size-4" strokeWidth={1.5} />
+              </Button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {previewKb.symptoms && (
+                <p className="text-meta">{previewKb.symptoms}</p>
+              )}
+
+              {previewKb.steps.length > 0 && (
+                <ol className="space-y-1.5">
+                  {previewKb.steps.map((s, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-body">
+                      <span className="size-5 rounded-xs bg-muted text-foreground text-[12px] font-medium inline-flex items-center justify-center shrink-0 mt-0.5 tabular-nums">
+                        {idx + 1}
+                      </span>
+                      <span className="whitespace-pre-wrap">{s}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+
+              {previewKb.notes && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-meta">Commands / Notes</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyText("preview-kb-notes", previewKb.notes || "")}
+                      className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
+                    >
+                      {copiedKey === "preview-kb-notes" ? (
+                        <Check className="size-3" strokeWidth={1.5} />
+                      ) : (
+                        <Copy className="size-3" strokeWidth={1.5} />
+                      )}
+                      <span>{copiedKey === "preview-kb-notes" ? "Copied" : "Copy"}</span>
+                    </button>
+                  </div>
+                  <pre className="rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] overflow-x-auto whitespace-pre-wrap">
+                    {previewKb.notes}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            <div className="px-4 py-3 border-t border-border bg-background flex items-center justify-end gap-2 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  if (previewKb.visibility === "INTERNAL") setComposerTab("note");
+                  else setComposerTab("reply");
+                  handleInsertKbArticle(previewKb);
+                  setPreviewKb(null);
+                }}
+              >
+                Insert text
+              </Button>
+              {previewKb.visibility === "PUBLIC" ? (
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => {
+                    setComposerTab("reply");
+                    handleAttachKbCard(previewKb);
+                  }}
+                >
+                  Attach KB card to Reply
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => {
+                    setComposerTab("note");
+                    handleAttachKbCard(previewKb);
+                  }}
+                >
+                  Attach to Internal note
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </AppShell>
   );

@@ -43,6 +43,13 @@ async def lifespan(_app: FastAPI):
                 await conn.execute(
                     text("CREATE INDEX IF NOT EXISTS ix_tickets_parent_ticket_id ON tickets (parent_ticket_id)")
                 )
+            c_cols = (await conn.execute(text("PRAGMA table_info(ticket_comments)"))).fetchall()
+            c_col_names = {row[1] for row in c_cols}
+            if "kb_article_id" not in c_col_names:
+                await conn.execute(text("ALTER TABLE ticket_comments ADD COLUMN kb_article_id CHAR(32)"))
+                await conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_ticket_comments_kb_article_id ON ticket_comments (kb_article_id)")
+                )
 
     storage_service.ensure_bucket()
 

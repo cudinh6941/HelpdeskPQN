@@ -127,6 +127,16 @@ export interface KbSourceTicketBrief {
   title: string;
 }
 
+export interface KbArticleBrief {
+  id: string;
+  visibility: KbVisibility;
+  title: string;
+  category?: Category | null;
+  steps: string[];
+  notes?: string | null;
+  attachments: Attachment[];
+}
+
 export interface KbArticleDetail {
   id: string;
   category_id?: string | null;
@@ -191,6 +201,8 @@ export interface TicketComment {
   author: UserBrief;
   body: string;
   is_internal: boolean;
+  kb_article_id?: string | null;
+  kb_article?: KbArticleBrief | null;
   created_at: string;
   attachments: Attachment[];
 }
