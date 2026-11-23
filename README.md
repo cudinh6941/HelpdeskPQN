@@ -19,10 +19,43 @@ Trong `.env`:
 - Cấu hình `LDAP_SERVER_URI`, `LDAP_DOMAIN`, `LDAP_BASE_DN`, `LDAP_USER_DN_TEMPLATE`, `LDAP_SEARCH_FILTER`.
 - Khi `LDAP_ALLOW_LOCAL_FALLBACK=true` (mặc định bật ở dev), có thể đăng nhập bằng tài khoản nội bộ trong DB (`nhanvien`, `kythuat`, `truongnhom`, `admin` — mật khẩu mặc định `Password123!`).
 
-## Chạy với Docker Compose
-```bash
+## Chạy dự án
+
+### Cách 1: Chạy dev local (khuyên dùng khi đang code — nhanh, có hot-reload)
+Mở **2 cửa sổ terminal (PowerShell)**:
+
+1. **Terminal 1 — Backend (FastAPI):**
+```powershell
+cd backend
+.\.venv\Scripts\uvicorn.exe app.main:app --reload --port 8000
+```
+*(Hoặc activate trước: `.\.venv\Scripts\Activate.ps1` rồi chạy `uvicorn app.main:app --reload --port 8000`)*
+
+2. **Terminal 2 — Frontend (Next.js):**
+```powershell
+cd frontend
+npm run dev
+```
+
+- Web Portal / Workspace: `http://localhost:3000`
+- FastAPI Swagger UI: `http://localhost:8000/docs`
+- *(Lưu ý: nếu trước đó có chạy Docker thì chạy `docker compose down` để nhả cổng `8000` và `3000`.)*
+
+### Cách 2: Chạy toàn bộ bằng Docker Compose (test giống môi trường thật / deploy)
+*(Nhớ mở **Docker Desktop** trước khi chạy)*
+
+```powershell
+# Tạo .env nếu chưa có
 cp .env.example .env
+
+# Lần đầu chạy hoặc khi vừa sửa code / dependencies:
 docker compose up -d --build
+
+# Các lần sau (không sửa code):
+docker compose up -d
+
+# Dừng container (giữ nguyên dữ liệu DB & MinIO):
+docker compose down
 ```
 - Web Portal / Workspace: `http://localhost`
 - FastAPI Swagger UI: `http://localhost/docs`
